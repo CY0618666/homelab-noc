@@ -9,7 +9,10 @@
   // 主题要在首屏渲染前定下来，否则会白/黑闪一下
   (function () {
     try {
-      var t = localStorage.getItem('noc-theme');
+      // ?theme=light|dark 优先，方便截图自检和分享固定主题的链接
+      var q = null;
+      try { q = new URLSearchParams(location.search).get('theme'); } catch (e2) { /* 老浏览器忽略 */ }
+      var t = (q === 'light' || q === 'dark') ? q : localStorage.getItem('noc-theme');
       if (t !== 'light' && t !== 'dark') {
         // 没选过就跟随系统：系统是浅色就别一上来糊一脸黑
         t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)
