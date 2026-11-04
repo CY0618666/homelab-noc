@@ -85,3 +85,8 @@ scratch/
 
 # 截图输出（scripts/shot_noc.py 生成）
 shots/
+
+# 极空间批量整理的一次性脚本与中间产物（临时，禁止入库）
+_zs_*
+_r[0-9]*.json
+temp_zs_*.sh
