@@ -80,7 +80,11 @@
   --lamp-line: rgba(255, 200, 77, 0.45);
   --lamp-glow: 0 0 18px rgba(255, 200, 77, 0.28);
 
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  /* 中文优先的字体栈：先看系统有没有苹方/雅黑，再退到通用 sans。
+     不走 Google Fonts —— 内网挂墙的面板不能指望外网字体服务，断网就变默认体。 */
+  --sans: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei",
+          "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --radius: 14px;
 }
 
@@ -168,7 +172,7 @@ body {
     radial-gradient(760px 420px at 92% 108%, var(--glow-b), transparent 70%),
     var(--bg);
   color: var(--txt);
-  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: var(--sans);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
@@ -178,14 +182,14 @@ body {
 
 .app {
   display: grid;
-  /* 两侧放宽、中间收窄：拓扑本身用 viewBox 缩放，给太宽只是留白 */
-  grid-template-columns: 360px minmax(0, 1fr) 396px;
+  /* 四层：顶栏 / 状态带 / 当前页签内容 / 底部汇总。
+     页签内部各自再有栅格，见下方 .v-* —— 一个巨型栅格切页签会越写越乱。 */
   grid-template-rows: 64px 52px minmax(0, 1fr) auto;
   grid-template-areas:
-    "top top top"
-    "band band band"
-    "left stage right"
-    "wall wall wall";
+    "top"
+    "band"
+    "view"
+    "foot";
   gap: 10px;
   padding: 12px;
   height: 100vh;
@@ -193,12 +197,67 @@ body {
   min-width: 0;
 }
 
+/* ---------- 页签 ---------- */
+.view { grid-area: view; display: none; gap: 10px; min-height: 0; min-width: 0; }
+/* 行高必须显式给 1fr：默认 auto 会让面板缩到内容高度，整页下半截全空 */
+.view.on { display: grid; grid-template-rows: minmax(0, 1fr); }
+
+.v-overview.on {
+  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-areas: "left stage";
+}
+.v-network.on {
+  /* 有线在上、无线在下，时延单独占右列——5 个口撑不满一列，硬撑只会留白 */
+  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "ports probe" "wifi probe";
+}
+.v-compute.on {
+  grid-template-columns: 372px minmax(0, 1fr);
+  grid-template-areas: "left vm";
+}
+.v-clients.on {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "wall";
+}
+
+.v-network .p-ports { grid-area: ports; }
+.v-network .p-wifi { grid-area: wifi; }
+.v-network .p-probe { grid-area: probe; }
+.v-compute .p-vm { grid-area: vm; }
+/* 页签里的面板要占满剩余高度，否则底部会空一大块 */
+.v-compute .p-pve { flex: 1; }
+.v-compute .p-vm { display: flex; flex-direction: column; min-height: 0; }
+.v-network .p-ports { display: flex; flex-direction: column; min-height: 0; }
+/* 网络页：端口行做高一点，隔着一米看也读得清；无线覆盖按内容高度收住 */
+.v-network .port-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.v-network .port-list li {
+  grid-template-columns: 34px minmax(0, 1fr) 156px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.v-network .port-list li:last-child { border-bottom: none; }
+.v-network .port-list .port-bars { height: 6px; }
+.v-network .port-list .port-no { font-size: 12px; }
+.v-network .port-list .port-name { font-size: 12.5px; }
+.v-network .port-list .port-rate { font-size: 12px; }
+.v-network .probe-list { justify-content: space-evenly; }
+/* 无线覆盖在宽列里排成两栏，两张 AP 卡不必挤成一条 */
+.v-network .ap-list {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.v-network .p-wifi { align-self: start; max-height: 100%; }
+
 /* ---------- 顶栏 ---------- */
 .top {
   grid-area: top;
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 16px;
   padding: 0 20px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -217,6 +276,26 @@ body {
 }
 .brand-txt h1 { font-size: 14px; font-weight: 500; letter-spacing: 0.02em; }
 .brand-txt p { font-size: 11px; color: var(--txt-3); margin-top: 2px; }
+
+/* ---------- 页签切换 ---------- */
+.tabs { display: flex; gap: 2px; flex-shrink: 0; padding: 3px; border-radius: 10px;
+  background: var(--surface-1); border: 1px solid var(--line); }
+.tab {
+  position: relative;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 7px; cursor: pointer;
+  background: none; border: none; font-family: inherit;
+  font-size: 12px; color: var(--txt-2);
+  transition: background 0.15s, color 0.15s;
+}
+.tab em {
+  font-style: normal; font-family: var(--mono); font-size: 9px;
+  color: var(--txt-3); opacity: 0.55; transition: opacity 0.15s;
+}
+.tab:hover { color: var(--txt); background: var(--surface-2); }
+.tab.on { color: var(--cyan); background: var(--accent-soft); }
+.tab.on em { opacity: 0.9; color: var(--cyan); }
+.tab:focus-visible { outline: 1px solid var(--accent-line); outline-offset: 1px; }
 
 .top-stats { display: flex; align-items: center; gap: 4px; flex: 1; overflow: hidden; }
 .stat {
@@ -337,9 +416,10 @@ body {
   overflow: hidden;
 }
 .p-head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 9px;
   margin-bottom: 11px; flex-shrink: 0;
 }
+.p-head h2 { margin-right: auto; }
 .p-head h2 {
   font-size: 11px; font-weight: 500; letter-spacing: 0.1em;
   color: var(--txt-2); text-transform: uppercase;
@@ -520,8 +600,9 @@ body {
   box-shadow: var(--panel-shadow);
   padding: 12px 16px 14px;
   display: flex; flex-direction: column; gap: 11px;
+  min-height: 0; overflow: hidden;
 }
-.wall-head { display: flex; align-items: baseline; gap: 14px; }
+.wall-head { display: flex; align-items: center; gap: 14px; flex-shrink: 0; flex-wrap: wrap; }
 .wall-head h2 { font-size: 11px; font-weight: 500; letter-spacing: 0.1em; color: var(--txt-2); text-transform: uppercase; }
 .wall-head .hint { margin-left: auto; }
 .wall-filter { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -535,15 +616,11 @@ body {
 .wf.active { color: var(--txt); border-color: var(--accent-line); background: var(--accent-soft); }
 
 .wall-body {
-  display: grid;
-  /* auto-fit + 1fr：类别块按可用宽度均分，不再全部挤在左边 */
-  grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
-  gap: 13px 16px;
-  align-items: stretch;
+  display: flex; flex-direction: column; gap: 16px;
+  overflow-y: auto; min-height: 0; flex: 1;
+  align-content: flex-start;
 }
-.wall-group { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-/* 只筛一个类别时别让那一块横着拉满整行（否则卡片间距被撑得很稀） */
-.wall-body:has(.wall-group:only-child) .wall-group { max-width: 560px; }
+.wall-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .wall-gh {
   display: flex; align-items: center; gap: 6px;
   font-size: 10.5px; color: var(--txt-3); letter-spacing: 0.04em;
@@ -552,38 +629,10 @@ body {
 .wall-gh b { font-family: var(--mono); font-weight: 500; color: var(--txt-2); }
 .wall-grid {
   display: grid;
-  /* 卡片宽度随类别块伸缩，块内铺满，不再留一条右空白 */
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-  grid-auto-rows: 52px;
-  gap: 6px;
+  /* 一屏能扫完的最大信息量：卡片宽 152 起，随宽度自动铺满整行 */
+  grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
+  gap: 7px;
 }
-.wall-cell {
-  /* 横向胶囊：图标 + IP 尾号，宽度跟着类别块自适应 */
-  width: auto; height: 52px; border-radius: 10px;
-  display: flex; flex-direction: row; align-items: center; justify-content: center;
-  gap: 5px; padding: 0 2px; overflow: hidden;
-  cursor: pointer; position: relative; min-width: 0;
-  background: var(--surface-1);
-  border: 1px solid var(--line);
-  transition: transform 0.12s, border-color 0.15s, background 0.15s;
-}
-.wall-cell:hover { transform: translateY(-2px); border-color: var(--c); background: var(--surface-3); }
-.wall-cell svg { width: 16px; height: 16px; flex-shrink: 0; stroke: var(--c); stroke-width: 1.5; fill: none; opacity: 0.92; position: relative; z-index: 1; }
-.wall-cell .tail { font-family: var(--mono); font-size: 10px; color: var(--txt-3); letter-spacing: -0.02em; position: relative; z-index: 1; }
-.wall-cell.on { border-color: var(--c); }
-.wall-cell.on::before {
-  content: ""; position: absolute; inset: 0; border-radius: 8px;
-  background: var(--c); opacity: 0.1;
-}
-.wall-cell.on::after {
-  content: ""; position: absolute; top: 4px; right: 4px;
-  width: 4px; height: 4px; border-radius: 50%; background: var(--c);
-}
-.wall-cell.off { opacity: 0.32; }
-.wall-cell.off svg { stroke: var(--txt-3); }
-/* iKuai 刚把它从在线表里漏掉、还在宽限期：格子留着别闪，弱化 + 状态点变空心 */
-.wall-cell.stale { opacity: 0.42; }
-.wall-cell.stale.on::after { background: transparent; border: 1px solid var(--c); }
 
 /* ---------- 抽屉（设备详情） ---------- */
 .drawer {
@@ -669,6 +718,49 @@ body {
   padding: 16px 20px 24px;
   display: flex; flex-direction: column; gap: 16px;
 }
+
+/* ---------- 事件历史面板 ---------- */
+.evt-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.evt-tools .wall-search { width: 100%; order: 9; margin-top: 2px; }
+
+.evt-days { display: flex; align-items: flex-end; gap: 4px; height: 46px; }
+.evt-day {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  min-width: 0;
+}
+.evt-day i {
+  display: block; width: 100%; height: calc(var(--h, 4%) * 0.4);
+  min-height: 3px; max-height: 28px;
+  border-radius: 2px; background: var(--accent-line);
+}
+.evt-day.warn i { background: var(--warn-line); }
+.evt-day.crit i { background: var(--crit-line); }
+.evt-day em { font-style: normal; font-family: var(--mono); font-size: 8.5px; color: var(--txt-3); }
+
+.evt-list { list-style: none; display: flex; flex-direction: column; }
+.evt-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.evt-row:last-child { border-bottom: none; }
+.evt-t {
+  display: flex; flex-direction: column; flex-shrink: 0; width: 48px;
+  font-family: var(--mono); text-align: right;
+}
+.evt-t b { font-size: 11px; font-weight: 500; color: var(--txt-2); }
+.evt-t i { font-style: normal; font-size: 9px; color: var(--txt-3); }
+.evt-dot {
+  width: 6px; height: 6px; border-radius: 50%; margin-top: 5px;
+  background: var(--cyan); flex-shrink: 0;
+}
+.evt-row.warn .evt-dot { background: var(--warn); }
+.evt-row.crit .evt-dot { background: var(--crit); }
+.evt-x { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.evt-text { font-size: 12px; color: var(--txt-2); }
+.evt-row.warn .evt-text { color: var(--warn); }
+.evt-row.crit .evt-text { color: var(--crit); }
+.evt-detail { font-size: 10.5px; color: var(--txt-3); font-family: var(--mono); word-break: break-all; }
+.evt-empty { padding: 26px; text-align: center; font-size: 12px; color: var(--txt-3); }
 
 /* 概览三连 */
 .sheet-sum { display: flex; gap: 8px; }
@@ -819,10 +911,173 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); }
 
+/* ---------- 分段控件（曲线时间窗） ---------- */
+.seg {
+  display: flex; gap: 2px; padding: 2px; border-radius: 7px;
+  background: var(--surface-1); border: 1px solid var(--line);
+}
+.seg button {
+  font-size: 9.5px; padding: 2px 7px; border-radius: 5px; cursor: pointer;
+  background: none; border: none; font-family: inherit;
+  color: var(--txt-3); transition: 0.15s; white-space: nowrap;
+}
+.seg button:hover { color: var(--txt-2); }
+.seg button.on { color: var(--cyan); background: var(--accent-soft); }
+
+.mini-btn {
+  font-size: 10px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line-2); background: none; color: var(--txt-3);
+  font-family: inherit; transition: 0.15s; white-space: nowrap;
+}
+.mini-btn:hover { color: var(--txt); border-color: var(--accent-line); }
+
+/* ---------- 24 小时趋势 ---------- */
+.trend-box { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line); }
+.trend-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  font-size: 10px; color: var(--txt-3); margin-bottom: 7px;
+}
+#pveChart { width: 100%; height: 70px; display: block; }
+.lg.cpu::before, .lg.mem::before { content: ""; width: 10px; height: 2px; border-radius: 2px; }
+.lg.cpu::before { background: var(--cyan); }
+.lg.mem::before { background: var(--violet); }
+
+/* ---------- 底部汇总 ---------- */
+.summary {
+  grid-area: foot;
+  display: flex; align-items: center;
+  height: 34px; padding: 0 16px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); box-shadow: var(--panel-shadow);
+  font-size: 10.5px; color: var(--txt-3);
+}
+.sum-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 14px; border-left: 1px solid var(--line); flex-shrink: 0;
+}
+.sum-item:first-child { border-left: none; padding-left: 2px; }
+.sum-item i { width: 5px; height: 5px; border-radius: 50%; display: block; flex-shrink: 0; }
+.sum-item b {
+  font-family: var(--mono); font-weight: 500; color: var(--txt-2);
+  font-variant-numeric: tabular-nums;
+}
+.sum-item.total b { color: var(--txt); }
+.sum-sp { margin-left: auto; display: flex; align-items: center; }
+.sum-sp .sum-item:first-child { border-left: 1px solid var(--line); padding-left: 14px; }
+
+/* ---------- 虚拟机 / 容器表 ---------- */
+.p-vm { min-width: 0; }
+.vm-table-wrap { flex: 1; overflow: auto; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+.vm-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.vm-table th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; font-weight: 500;
+  font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--txt-3); padding: 0 10px 9px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-solid, var(--bg));
+  backdrop-filter: blur(2px);
+}
+.vm-table td {
+  padding: 10px; border-bottom: 1px solid var(--line);
+  color: var(--txt-2); vertical-align: middle;
+}
+.vm-table tbody tr { transition: background 0.13s; }
+.vm-table tbody tr:hover { background: var(--surface-2); }
+.vm-table tbody tr:last-child td { border-bottom: none; }
+.vm-table .c-st { width: 54px; }
+.vm-table .c-kind { width: 58px; }
+.vm-table .c-cpu, .vm-table .c-mem { width: 148px; }
+.vm-table .c-disk { width: 124px; }
+.vm-table .c-net { width: 104px; }
+.vm-table .c-up { width: 92px; text-align: right; }
+.vm-table td.c-up { font-family: var(--mono); font-size: 10.5px; color: var(--txt-3); }
+
+.vm-st { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--txt-2); }
+.vm-st i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex-shrink: 0; }
+.vm-st.paused i { background: var(--warn); }
+.vm-st.off i { background: var(--txt-3); }
+.vm-name { color: var(--txt-strong); display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-vmid { font-family: var(--mono); font-size: 9.5px; color: var(--txt-3); }
+.vm-kind {
+  font-size: 9.5px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--line-2); color: var(--txt-3); font-family: var(--mono);
+}
+.vm-cpu-v { font-family: var(--mono); font-size: 10.5px; color: var(--txt-2); }
+.vm-bar { display: flex; align-items: center; gap: 8px; }
+.vm-bar .g-bar { flex: 1; min-width: 34px; }
+.vm-bar > span { font-family: var(--mono); font-size: 10.5px; color: var(--txt-2); white-space: nowrap; }
+.vm-net { font-family: var(--mono); font-size: 10.5px; color: var(--cyan); white-space: nowrap; }
+.vm-net.dim { color: var(--txt-3); }
+.vm-foot {
+  margin-top: 10px; padding-top: 10px; flex-shrink: 0;
+  border-top: 1px solid var(--line);
+  font-size: 10px; color: var(--txt-3); font-family: var(--mono);
+}
+
+/* ---------- 终端墙卡片 ---------- */
+.wall-search {
+  width: 220px; flex-shrink: 0;
+  padding: 4px 10px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--surface-1);
+  color: var(--txt); font-family: inherit; font-size: 11px;
+  transition: border-color 0.15s;
+}
+.wall-search::placeholder { color: var(--txt-3); }
+.wall-search:focus { outline: none; border-color: var(--accent-line); }
+
+.wall-cell {
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding: 8px 10px; min-height: 58px; min-width: 0; overflow: hidden;
+  border-radius: 9px; cursor: pointer; position: relative;
+  background: var(--surface-1); border: 1px solid var(--line);
+  transition: transform 0.12s, border-color 0.15s, background 0.15s;
+}
+.wall-cell:hover { transform: translateY(-2px); border-color: var(--c); background: var(--surface-3); }
+.wc-h { display: flex; align-items: center; gap: 5px; min-width: 0; position: relative; z-index: 1; }
+.wall-cell svg {
+  width: 14px; height: 14px; flex-shrink: 0;
+  stroke: var(--c); stroke-width: 1.5; fill: none; opacity: 0.92;
+}
+.wc-name {
+  font-size: 11px; color: var(--txt-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wc-ip {
+  font-family: var(--mono); font-size: 9.5px; color: var(--txt-3);
+  position: relative; z-index: 1;
+}
+.wc-meta {
+  font-size: 9.5px; color: var(--txt-3); position: relative; z-index: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wall-cell.on { border-color: var(--c); }
+.wall-cell.on::before {
+  content: ""; position: absolute; inset: 0; border-radius: 9px;
+  background: var(--c); opacity: 0.09;
+}
+.wall-cell.on::after {
+  content: ""; position: absolute; top: 7px; right: 7px;
+  width: 4px; height: 4px; border-radius: 50%; background: var(--c);
+}
+.wall-cell.off { opacity: 0.34; }
+.wall-cell.off svg { stroke: var(--txt-3); }
+/* iKuai 刚把它从在线表里漏掉、还在宽限期：格子留着别闪，弱化 + 状态点变空心 */
+.wall-cell.stale { opacity: 0.44; }
+.wall-cell.stale.on::after { background: transparent; border: 1px solid var(--c); }
+.wall-empty {
+  grid-column: 1 / -1; padding: 40px; text-align: center;
+  font-size: 12px; color: var(--txt-3);
+  border: 1px dashed var(--line-2); border-radius: 12px;
+}
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 1560px) {
-  .app { grid-template-columns: 318px minmax(0, 1fr) 348px; }
+  .v-overview.on { grid-template-columns: 318px minmax(0, 1fr); }
+  .v-network.on { grid-template-columns: minmax(0, 1fr) 320px; }
+  .v-compute.on { grid-template-columns: 344px minmax(0, 1fr); }
   .top-stats .stat { padding: 0 12px; }
+  .tab { padding: 6px 11px; }
 }
 /* 状态带十项在这个宽度已放不下，提前换行，别被 overflow:hidden 裁掉 */
 @media (max-width: 1420px) {
@@ -833,48 +1088,58 @@ body {
   .sb-grp { flex-wrap: wrap; row-gap: 4px; }
   .sb-mid { margin: 0 auto; justify-self: auto; }
   .sbi { padding: 5px 12px; }
+  .tab em { display: none; }
 }
+/* 平板横屏：概览页还撑得住，网络页右栏并到下边 */
 @media (max-width: 1300px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas:
-      "top top"
-      "band band"
-      "stage stage"
-      "left right"
-      "wall wall";
-    grid-template-rows: auto auto 460px auto auto;
-    height: auto;
+  .v-overview.on {
+    grid-template-columns: 300px minmax(0, 1fr);
   }
-  .stage { min-height: 460px; }
+  .v-network.on {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+  .v-compute.on {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
   .top { flex-wrap: wrap; height: auto; padding: 10px 16px; gap: 14px; }
   .top-stats { flex-wrap: wrap; }
-
 }
 /* 平板竖屏 / 分屏：两列会把卡片压到 200px 以内，改单列堆叠 */
 @media (max-width: 1100px) {
   .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "top" "band" "stage" "left" "right" "wall";
-    grid-template-rows: auto auto 420px auto auto auto;
+    grid-template-rows: auto auto auto auto;
     height: auto;
   }
-  .stage { min-height: 420px; }
+  .view.on {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+  }
+  .v-overview.on { grid-template-areas: "stage" "left"; grid-template-rows: 430px auto; }
+  .v-network.on { grid-template-areas: "ports" "wifi" "probe"; grid-template-rows: auto auto auto; }
+  .v-compute.on { grid-template-areas: "left" "vm"; grid-template-rows: auto auto; }
+  .v-clients.on { grid-template-areas: "wall"; }
+  .left, .right, .stage, .wall { grid-area: auto; }
+  .stage { min-height: 430px; }
+  .vm-table-wrap { max-height: 60vh; }
 }
 @media (max-width: 860px) {
   .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "top" "band" "stage" "left" "right" "wall";
-    grid-template-rows: auto auto 380px auto auto auto;
+    grid-template-rows: auto auto auto auto;
     padding: 8px;
     gap: 8px;
   }
-  .stage { min-height: 380px; }
+  .v-overview.on { grid-template-rows: 340px auto; }
+  .stage { min-height: 340px; }
   .top { flex-wrap: wrap; height: auto; padding: 14px 16px; gap: 12px; }
   .top-stats { flex-wrap: wrap; }
   .stat { padding: 0 10px; }
   .clock { display: none; }
   .theme-btn { margin-left: auto; }
+  .tabs { order: 3; width: 100%; }
+  .tab { flex: 1; justify-content: center; }
+  .summary { overflow-x: auto; height: 32px; }
+  .wall-search { width: 100%; order: 5; }
+  .wall-grid { grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); }
   .sheet-card { width: 100vw; }
   .lamp-grid { grid-template-columns: 1fr; }
   /* 手机宽度下横滚状态带很难用，改成自动换行 */
@@ -889,6 +1154,7 @@ body {
   .sb-grp { flex-wrap: wrap; row-gap: 4px; }
   .sb-mid { margin: 0; justify-self: auto; }
   .sb-n { max-width: 140px; }
+
 }
 
 /* ---------- 交换机端口 ---------- */
@@ -989,6 +1255,34 @@ text.port-rate {
   letter-spacing: -0.02em;
 }
 .ap-empty { font-size: 11px; color: var(--txt-3); padding: 4px 0; }
+
+/* ---------- 无线客户端（按 AP 分组） ---------- */
+.ap-clients {
+  margin-top: 12px; padding-top: 11px;
+  border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 11px;
+  min-height: 0; overflow-y: auto;
+}
+.apc-grp { display: flex; flex-direction: column; gap: 6px; }
+.apc-h {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; color: var(--txt-3); letter-spacing: 0.04em;
+}
+.apc-h b { font-family: var(--mono); font-weight: 500; color: var(--txt-2); }
+.apc-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.apc {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 7px; border-radius: 6px; max-width: 190px;
+  background: var(--surface-1); border: 1px solid var(--line);
+}
+.apc em {
+  font-style: normal; font-size: 10.5px; color: var(--txt-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.apc i {
+  font-style: normal; font-family: var(--mono);
+  font-size: 9px; color: var(--txt-3); flex-shrink: 0;
+}
 
 /* 说明：这里原本有个 1500px 断点把 .sbi 的 padding 清成 `0 12px`，
    上下内边距被抹掉后 baseline 对齐从容器顶部起算，状态带文字就会贴到上边框。

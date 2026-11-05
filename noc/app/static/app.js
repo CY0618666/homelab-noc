@@ -34,12 +34,34 @@
     probeKey: '',
     vmKey: '',
     filter: 'all',
+    wallQ: '',
     devices: {},
     sheet: null,
+    view: (function () {
+      try { return localStorage.getItem('noc-view') || 'overview'; } catch (e) { return 'overview'; }
+    })(),
+    wanRange: '2m',
+    wide: { down: [], up: [] },
+    metrics: null,
   };
 
   /* ---------------- 工具 ---------------- */
   const pad = (n) => String(n).padStart(2, '0');
+
+  // 挂墙面板最怕"静默失败"：JS 一挂，页面就停在空壳上，看着像设备全掉线。
+  // 所以任何未捕获异常都直接糊在屏幕底部，别让它悄悄走掉。
+  window.addEventListener('error', (e) => {
+    let box = document.getElementById('jsErr');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'jsErr';
+      box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;'
+        + 'background:#b3261e;color:#fff;font:12px/1.5 ui-monospace,monospace;'
+        + 'padding:6px 10px;white-space:pre-wrap;max-height:30vh;overflow:auto';
+      document.body.appendChild(box);
+    }
+    box.textContent += `${e.message}  @${(e.filename || '').split('/').pop()}:${e.lineno}\n`;
+  });
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -48,6 +70,22 @@
   }
 
   const cssVar = (n) => getComputedStyle(ROOT).getPropertyValue(n).trim();
+
+  async function fetchJSON(url) {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error(url + ' ' + r.status);
+    return r.json();
+  }
+
+  // 上千个点画在 300px 宽的 canvas 上没有意义：等距抽稀，返回保留的下标
+  // （返回下标而不是数值，是为了让 down/up/时间戳三条数组始终对齐）
+  function thinIdx(arr, target) {
+    const n = arr.length;
+    if (n <= target) return arr.map((_, i) => i);
+    const out = [];
+    for (let i = 0; i < target; i++) out.push(Math.round(i * (n - 1) / (target - 1)));
+    return out;
+  }
 
   function alpha(color, a) {
     const c = (color || '').trim();
@@ -418,7 +456,17 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const down = state.series.down, up = state.series.up;
+    const wide = state.wanRange !== '2m';
+    const down = wide ? state.wide.down : state.series.down;
+    const up = wide ? state.wide.up : state.series.up;
+    const ts = wide ? state.wide.ts : null;
+    if (!down.length && !up.length) {
+      ctx.fillStyle = cssVar('--txt-3') || '#55647a';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('暂无采样', w / 2, h / 2 + 4);
+      return;
+    }
     const n = Math.max(down.length, 2);
     const max = Math.max(1024, ...down, ...up) * 1.18;
 
@@ -434,11 +482,18 @@
 
     const plot = (arr, color, fillA) => {
       if (arr.length < 2) return;
+      const useTime = ts && ts.length === arr.length && ts[ts.length - 1] > ts[0];
+      const t0 = useTime ? ts[0] : 0;
+      const span = useTime ? (ts[ts.length - 1] - t0) : 1;
       const step = w / (n - 1);
       const x0 = w - (arr.length - 1) * step;
+      const px = (i) => (useTime ? ((ts[i] - t0) / span) * w : x0 + i * step);
+      let firstX = null, lastX = 0;
       ctx.beginPath();
       arr.forEach((v, i) => {
-        const x = x0 + i * step;
+        const x = px(i);
+        if (firstX === null) firstX = x;
+        lastX = x;
         const y = h - Math.min(v / max, 1) * (h - 4) - 1;
         i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
       });
@@ -447,8 +502,9 @@
       ctx.lineJoin = 'round';
       ctx.stroke();
 
-      if (fillA) {
-        ctx.lineTo(w, h); ctx.lineTo(x0, h); ctx.closePath();
+      if (fillA && firstX !== null) {
+        // 填充只能沿数据实际覆盖的区间闭合，否则会从最后一个点斜拉到左边界
+        ctx.lineTo(lastX, h); ctx.lineTo(firstX, h); ctx.closePath();
         const grad = ctx.createLinearGradient(0, 0, 0, h);
         grad.addColorStop(0, alpha(color, fillA));
         grad.addColorStop(1, alpha(color, 0));
@@ -470,6 +526,149 @@
     if (state.series.up.length > MAX) state.series.up.shift();
   }
 
+  /* ---------------- 曲线时间窗（2 分钟 / 1 小时 / 24 小时） ---------------- */
+  const RANGE_TIP = { '2m': '近 2 分钟', '1h': '近 1 小时', '24h': '近 24 小时' };
+
+  async function loadWide(range) {
+    state.wanRange = range;
+    $('wanRangeTip').textContent = RANGE_TIP[range] || '';
+    document.querySelectorAll('#wanRange button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.r === range);
+    });
+    if (range === '2m') { drawChart(); return; }
+    try {
+      let down = [], up = [], ts = [];
+      if (range === '1h') {
+        // 内存环形缓冲：2 秒一个点，1 小时正好 1800 个
+        const rows = await fetchJSON('/api/history?minutes=60');
+        down = rows.map((r) => r.wan_down || 0);
+        up = rows.map((r) => r.wan_up || 0);
+        ts = rows.map((r) => r.t || 0);
+      } else {
+        // 落库采样：按 5 分钟聚合，曲线才不会是锯齿
+        const rows = await fetchJSON('/api/metrics?hours=24&step=300');
+        down = rows.map((r) => r.down || 0);
+        up = rows.map((r) => r.up || 0);
+        ts = rows.map((r) => r.t || 0);
+      }
+      const keep = thinIdx(down, 260);
+      state.wide = {
+        down: keep.map((i) => down[i]),
+        up: keep.map((i) => up[i]),
+        ts: keep.map((i) => ts[i]),
+      };
+      // 库里刚有点数据时，24 小时窗口其实只有十几分钟——如实写出来，别假装有全天数据
+      const t = state.wide.ts;
+      if (t.length > 1) {
+        const sec = t[t.length - 1] - t[0];
+        const want = range === '1h' ? 3600 : 86400;
+        if (sec < want * 0.5) $('wanRangeTip').textContent = '有数据 ' + durText(sec);
+      }
+    } catch (e) {
+      state.wide = { down: [], up: [], ts: [] };
+    }
+    drawChart();
+  }
+
+  function durText(sec) {
+    if (sec < 3600) return Math.max(Math.round(sec / 60), 1) + ' 分钟';
+    if (sec < 86400) return (sec / 3600).toFixed(1).replace('.0', '') + ' 小时';
+    return (sec / 86400).toFixed(1).replace('.0', '') + ' 天';
+  }
+
+  /* ---------------- PVE 24 小时曲线 ---------------- */
+  async function loadPveChart() {
+    const cv = $('pveChart');
+    if (!cv) return;
+    let rows = state.metrics;
+    if (!rows) {
+      try { rows = await fetchJSON('/api/metrics?hours=24&step=300'); } catch (e) { rows = []; }
+      state.metrics = rows;
+    }
+    drawPveChart(rows);
+  }
+
+  // 数据跨度说人话："近 10 分钟" / "近 3.5 小时"
+  function spanLabel(rows) {
+    const sec = (rows[rows.length - 1].t || 0) - (rows[0].t || 0);
+    if (sec < 3600) return '近 ' + Math.max(Math.round(sec / 60), 1) + ' 分钟';
+    if (sec < 86400) return '近 ' + (sec / 3600).toFixed(1).replace('.0', '') + ' 小时';
+    return '近 ' + (sec / 86400).toFixed(1).replace('.0', '') + ' 天';
+  }
+
+  function drawPveChart(rows) {
+    const cv = $('pveChart');
+    if (!cv) return;
+    const w = cv.clientWidth, h = cv.clientHeight || 70;
+    if (!w) return;                       // 页签没显示时宽度是 0，等切过去再画
+    const dpr = window.devicePixelRatio || 1;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const tip = $('pveChartTip');
+    if (!rows || !rows.length) {
+      ctx.fillStyle = cssVar('--txt-3') || '#55647a';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('开始采样后这里会有 24 小时曲线', w / 2, h / 2 + 4);
+      if (tip) tip.textContent = '采样中';
+      return;
+    }
+    if (tip) tip.textContent = rows.length + ' 点 · ' + (rows.length > 1 ? spanLabel(rows) : '采样中');
+
+    // 刚部署时库里只有十来分钟的点，硬按 24 小时画就只剩右边缘一根头发丝。
+    // 数据跨度不足 6 小时就先按实际跨度铺满，攒够时间后自动变回 24 小时视图。
+    const firstT = rows[0].t || 0;
+    const lastT = rows[rows.length - 1].t || 0;
+    const spanSec = lastT - firstT;
+    const zoom = spanSec > 0 && spanSec < 6 * 3600;
+
+    ctx.strokeStyle = cssVar('--grid-line') || 'rgba(255,255,255,0.055)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 2; i++) {
+      const y = (h / 3) * i;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+
+    const cCpu = cssVar('--cyan') || '#35b6f2';
+    const cMem = cssVar('--violet') || '#9d7cf5';
+
+    const line = (key, color, fillA) => {
+      const now = Date.now() / 1000;
+      const tEnd = zoom ? lastT + Math.max(spanSec * 0.03, 30) : now;
+      const tStart = zoom ? firstT : now - 24 * 3600;
+      let started = false, firstX = 0, lastX = 0;
+      ctx.beginPath();
+      rows.forEach((r) => {
+        const tv = r.t || 0;
+        if (!tv) return;
+        const x = Math.min(Math.max((tv - tStart) / (tEnd - tStart), 0), 1) * w;
+        const v = Math.min(Math.max(r[key] || 0, 0), 100) / 100;
+        const y = h - v * (h - 5) - 2;
+        if (!started) { firstX = x; }
+        lastX = x;
+        started ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        started = true;
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      if (fillA && started) {
+        ctx.lineTo(lastX, h); ctx.lineTo(firstX, h); ctx.closePath();
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, alpha(color, fillA));
+        grad.addColorStop(1, alpha(color, 0));
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+    };
+    line('mem', cMem, 0.16);
+    line('cpu', cCpu, 0.2);
+  }
+
   /* ---------------- 渲染 ---------------- */
   function render(snap) {
     state.snap = snap;
@@ -477,6 +676,7 @@
     pushSeries(snap);
     drawChart();
     updateTopo(snap);
+    renderSummary(snap);
 
     const h = snap.health || { score: 0, level: 'ok', issues: [] };
     const hb = $('healthBox');
@@ -507,6 +707,7 @@
     renderStatusBand(snap);
     renderPorts(snap.switch);
     renderWifi(snap.miwifi);
+    renderApClients(snap.devices || []);
     renderProbes(snap.probes || []);
     renderPVE(snap.pve);
     renderStore(snap.pve, snap.local);
@@ -692,6 +893,36 @@
   }
 
   /* ---------------- 无线覆盖 ---------------- */
+  function renderApClients(devices) {
+    const box = $('apClients');
+    if (!box) return;
+    const groups = {};
+    (devices || []).forEach((d) => {
+      if (!d.wifi_ap) return;
+      (groups[d.wifi_ap] = groups[d.wifi_ap] || []).push(d);
+    });
+    const names = Object.keys(groups);
+    if (!names.length) {
+      if (box.dataset.k !== '') { box.dataset.k = ''; box.innerHTML = ''; }
+      return;
+    }
+    const html = names.map((ap) => {
+      const list = groups[ap].slice().sort((x, y) => (y.down || 0) - (x.down || 0));
+      const chips = list.map((d) => {
+        const band = d.wifi_band ? d.wifi_band.replace('GHz', 'G') : '';
+        const rate = Math.max(d.down || 0, d.up || 0);
+        return `<span class="apc" title="${esc(d.display)} · ${esc(d.ip)} ${band}${rate > 1024 ? ' · ' + fmtRate(rate) : ''}">
+          <em>${esc(d.display)}</em><i>${d.ip.split('.').pop()}${band ? ' ' + band : ''}</i></span>`;
+      }).join('');
+      return `<div class="apc-grp">
+        <div class="apc-h">${esc(ap)}<b>${list.length}</b></div>
+        <div class="apc-list">${chips}</div>
+      </div>`;
+    }).join('');
+    // 每秒都会重算，但内容不变就别动 DOM（否则 hover 与滚动一直被打断）
+    if (box.dataset.k !== html) { box.dataset.k = html; box.innerHTML = html; }
+  }
+
   function renderWifi(wifi) {
     const box = $('apList');
     if (!box) return;
@@ -759,18 +990,51 @@
     $('pveBadge').textContent = (pve.version || '').split('/')[0].replace('pve-manager', 'PVE') || '在线';
     $('pveMeta').textContent = `${pve.cpus} 线程 · ${(pve.mem_used / 1e9).toFixed(1)}/${(pve.mem_total / 1e9).toFixed(0)}G · 运行 ${fmtDur(pve.uptime)}`;
 
-    const key = (pve.guests || []).map((g) => g.vmid + g.status + Math.round((g.cpu || 0)) + Math.round((g.netin + g.netout) / 4096)).join('|');
+    const guests = pve.guests || [];
+    const key = guests.map((g) => g.vmid + g.status + Math.round((g.cpu || 0)) + Math.round((g.netin + g.netout) / 4096)).join('|');
     if (key === state.vmKey) return;
     state.vmKey = key;
-    $('vmList').innerHTML = (pve.guests || []).map((g) => {
+
+    const KIND = { qemu: 'VM', lxc: 'CT' };
+    const ST = { running: '运行中', stopped: '已停止', paused: '已暂停' };
+    $('vmList').innerHTML = guests.map((g) => {
       const net = (g.netin || 0) + (g.netout || 0);
-      return `<li class="${g.status === 'running' ? '' : 'stopped'}">
-        <span class="vdot"></span>
-        <span class="vmid">${g.vmid}</span>
-        <span class="vname">${g.name}</span>
-        <span class="vnet">${net > 1024 ? fmtRate(net) : '—'}</span>
-      </li>`;
+      const memPct = g.maxmem ? (g.mem || 0) / g.maxmem * 100 : 0;
+      const disk = g.maxdisk ? (g.disk || 0) / g.maxdisk * 100 : 0;
+      const stCls = g.status === 'running' ? '' : (g.status === 'paused' ? 'paused' : 'off');
+      const cpuTxt = (g.cpu || 0).toFixed(1) + '%' + (g.cpus ? ' · ' + g.cpus + ' 核' : '');
+      return `<tr data-ip="" title="${esc(g.name)}">
+        <td><span class="vm-st ${stCls}"><i></i>${ST[g.status] || g.status || '—'}</span></td>
+        <td><span class="vm-name">${esc(g.name)}</span><span class="vm-vmid">${g.vmid}</span></td>
+        <td><span class="vm-kind">${KIND[g.kind] || g.kind || '—'}</span></td>
+        <td>
+          <div class="vm-bar">
+            <span class="g-bar"><i style="width:${Math.min(g.cpu || 0, 100)}%"></i></span>
+            <span>${cpuTxt}</span>
+          </div>
+        </td>
+        <td>
+          <div class="vm-bar">
+            <span class="g-bar"><i class="${memPct > 90 ? 'crit' : memPct > 75 ? 'warn' : ''}" style="width:${Math.min(memPct, 100)}%"></i></span>
+            <span>${fmtBytes(g.mem || 0)} / ${fmtBytes(g.maxmem || 0)}</span>
+          </div>
+        </td>
+        <td>
+          <div class="vm-bar">
+            <span class="g-bar"><i class="${disk > 90 ? 'crit' : ''}" style="width:${Math.min(disk, 100)}%"></i></span>
+            <span>${fmtBytes(g.maxdisk || 0)}</span>
+          </div>
+        </td>
+        <td><span class="vm-net ${net > 1024 ? '' : 'dim'}">${net > 1024 ? '↓' + fmtRate(net) : '—'}</span></td>
+        <td class="c-up">${g.uptime ? fmtDur(g.uptime) : '—'}</td>
+      </tr>`;
     }).join('');
+
+    const run = guests.filter((g) => g.status === 'running').length;
+    $('vmHint').textContent = `${run} / ${guests.length} 运行中`;
+    const netAll = guests.reduce((a, g) => a + (g.netin || 0) + (g.netout || 0), 0);
+    const memAll = guests.reduce((a, g) => a + (g.mem || 0), 0);
+    $('vmFoot').textContent = `合计 ${guests.length} 台 · 运行 ${run} · 内存占用 ${fmtBytes(memAll)} · 实时吞吐 ${fmtRate(netAll)}`;
   }
 
   function setBar(el, pct) {
@@ -808,35 +1072,69 @@
   }
 
   /* ---------------- 终端墙 ---------------- */
+  // 卡片第三行：优先给接入方式，有实时流量就给速率——一眼能看出"谁在占带宽"
+  function devMeta(d) {
+    if (d.stale) return '刚失去在线信号';
+    if (d.ikuai_seen === false) return 'iKuai 未上报 · 探测可达';
+    const bits = [];
+    if (d.wifi_ap) bits.push(d.wifi_ap + (d.wifi_band ? ' ' + d.wifi_band : ''));
+    else if (d.iface) bits.push('有线');
+    const rate = Math.max(d.down || 0, d.up || 0);
+    if (rate > 1024) {
+      bits.push((d.down >= d.up ? '↓ ' : '↑ ') + fmtRate(rate));
+    } else if (!d.wifi_ap && d.zone && d.zone !== '未知') {
+      bits.push(d.zone);
+    }
+    if (!bits.length) bits.push(d.vendor && d.vendor !== 'Unknown' ? d.vendor : '—');
+    return bits.join(' · ');
+  }
+
   function renderWall(devices, summary) {
-    // stale / ikuai_seen 变化也要重画，否则格子会停在旧状态
-    const key = state.filter + '#' + devices.map((d) => d.ip + (d.stale ? '~' : '') + (d.ikuai_seen === false ? '?' : '')).join(',');
+    // stale / ikuai_seen / 搜索词变化都要重画，否则格子会停在旧状态
+    const key = state.filter + '#' + state.wallQ + '#'
+      + devices.map((d) => d.ip + (d.stale ? '~' : '') + (d.ikuai_seen === false ? '?' : '') + (d.display || '')).join(',');
     if (key === state.wallKey) return;
     state.wallKey = key;
 
     state.devices = {};
     devices.forEach((d) => { state.devices[d.ip] = d; });
 
+    const q = state.wallQ.trim().toLowerCase();
     const groups = {};
     CAT_ORDER.forEach((c) => { groups[c] = []; });
     devices.forEach((d) => {
       if (state.filter !== 'all' && d.cat !== state.filter) return;
+      if (q) {
+        const hay = [d.display, d.name, d.ip, d.mac, d.vendor, d.zone, d.wifi_ap]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (hay.indexOf(q) < 0) return;
+      }
       (groups[d.cat] || groups.client).push(d);
     });
 
     const body = $('wallBody');
+    const total = CAT_ORDER.reduce((n, c) => n + groups[c].length, 0);
+    if (!total) {
+      body.innerHTML = `<div class="wall-empty">没有匹配的终端${q ? '：' + esc(state.wallQ) : ''}</div>`;
+      return;
+    }
+
     body.innerHTML = CAT_ORDER.map((cat) => {
       const list = groups[cat];
       if (!list.length) return '';
       const color = CAT_COLOR[cat];
       const cells = list.map((d) => {
-        const tail = d.ip.split('.').pop();
         // stale = iKuai 列表里刚消失，还在宽限期内；ikuai_seen=false = iKuai 没报但探测可达
         const cls = d.stale ? ' stale' : (d.ikuai_seen === false ? ' unwatched' : '');
         const note = d.stale ? ' · 刚失去在线信号'
           : (d.ikuai_seen === false ? ' · iKuai 未上报，探测可达' : '');
-        return `<div class="wall-cell on${cls}" style="--c:${color}" data-ip="${d.ip}" title="${esc(d.display)} · ${d.ip}${note}">
-          ${icon(d.icon)}<span class="tail">.${tail}</span>
+        const name = d.display || d.ip;
+        const tip = [name, d.ip, d.mac, d.vendor && d.vendor !== 'Unknown' ? d.vendor : '', note]
+          .filter(Boolean).join(' · ');
+        return `<div class="wall-cell on${cls}" style="--c:${color}" data-ip="${esc(d.ip)}" title="${esc(tip)}">
+          <span class="wc-h">${icon(d.icon)}<span class="wc-name">${esc(name)}</span></span>
+          <span class="wc-ip">${esc(d.ip)}</span>
+          <span class="wc-meta">${esc(devMeta(d))}</span>
         </div>`;
       }).join('');
       return `<div class="wall-group">
@@ -943,6 +1241,8 @@
   // 面板开着的时候跟着数据刷新，但不能把用户滚动位置抖没了
   function refreshSheet() {
     if (!state.sheet || !state.snap) return;
+    // 事件历史面板自己是异步取数 + 有输入框，不能被 SSE 每秒重渲染冲掉
+    if (state.sheet === 'events') return;
     const body = $('sheetBody');
     const html = sheetHTML(state.sheet);
     if (body.dataset.key === html) return;
@@ -1198,22 +1498,214 @@
     } else if (e.key === 'f' || e.key === 'F') {
       // 挂墙大屏用：全屏，去掉浏览器边框
       toggleFullscreen();
+    } else if (e.key >= '1' && e.key <= '4') {
+      setView(VIEWS[Number(e.key) - 1]);
     }
   });
 
+  /* ==========================================================================
+     页签：概览 / 网络 / 算力 / 终端
+     ========================================================================== */
+  const VIEWS = ['overview', 'network', 'compute', 'clients'];
+
+  function setView(name) {
+    const v = VIEWS.indexOf(name) >= 0 ? name : 'overview';
+    state.view = v;
+    VIEWS.forEach((k) => {
+      const el = $('v-' + k);
+      if (el) el.classList.toggle('on', k === v);
+    });
+    document.querySelectorAll('#tabs .tab').forEach((b) => {
+      const on = b.dataset.view === v;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    try { localStorage.setItem('noc-view', v); } catch (e) { /* 隐私模式 */ }
+
+    // 页签刚从 display:none 出来时 canvas 宽度是 0，必须重画一次
+    if (v === 'overview') { drawChart(); }
+    if (v === 'compute') { loadPveChart(); }
+    if (v === 'clients' && state.snap) {
+      state.wallKey = '';
+      renderWall(state.snap.devices || [], state.snap.summary);
+    }
+  }
+
+  document.querySelectorAll('#tabs .tab').forEach((b) => {
+    b.addEventListener('click', () => setView(b.dataset.view));
+  });
+
+  /* ==========================================================================
+     底部汇总：每类多少台，扫一眼就知道"少了一个"
+     ========================================================================== */
+  function renderSummary(snap) {
+    const box = $('summaryBar');
+    if (!box) return;
+    const s = snap.summary || {};
+    const cats = CAT_ORDER.map((c) => {
+      const n = (s.by_cat || {})[c] || 0;
+      return `<div class="sum-item"><i style="background:${CAT_COLOR[c]}"></i>${CAT_LABEL[c]}<b>${n}</b></div>`;
+    }).join('');
+    const html = `<div class="sum-item total">全屋终端 <b>${s.online || 0}</b> / <b>${s.known || 0}</b></div>`
+      + cats
+      + `<div class="sum-sp">`
+      + `<div class="sum-item">无线 <b>${s.wifi_online || 0}</b></div>`
+      + `<div class="sum-item">灯光 <b>${s.lights_on || 0}</b> / <b>${s.lights_total || 0}</b></div>`
+      + `<div class="sum-item">事件库 <b id="sumEvt">—</b></div>`
+      + `</div>`;
+    if (box.dataset.k !== html) { box.dataset.k = html; box.innerHTML = html; }
+  }
+
+  /* ==========================================================================
+     事件历史（SQLite）：按时间窗 / 级别 / 关键字翻库
+     ========================================================================== */
+  const EVT_LEVEL = { '': '全部', info: '信息', warn: '警告', crit: '严重' };
+  const EVT_HOURS = [[1, '1 小时'], [6, '6 小时'], [24, '24 小时'], [72, '3 天'], [168, '7 天']];
+
+  function openEventHistory() {
+    state.sheet = 'events';
+    state.evt = { hours: 24, level: '', q: '' };
+    $('sheetTitle').textContent = '事件历史';
+    $('sheetSub').textContent = '落库到 SQLite，容器重建也翻得回来';
+    const body = $('sheetBody');
+    body.innerHTML = `
+      <div class="evt-tools">
+        <div class="seg" id="evtHours">${EVT_HOURS.map(([h, l]) =>
+          `<button data-h="${h}" class="${h === 24 ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <div class="seg" id="evtLevel">${Object.keys(EVT_LEVEL).map((l) =>
+          `<button data-l="${l}" class="${l === '' ? 'on' : ''}">${EVT_LEVEL[l]}</button>`).join('')}</div>
+        <input class="wall-search" id="evtQ" type="search" placeholder="搜索事件内容" autocomplete="off">
+      </div>
+      <div class="evt-days" id="evtDays"></div>
+      <ul class="evt-list" id="evtList"><li class="evt-empty">加载中…</li></ul>`;
+    body.scrollTop = 0;
+    $('sheet').classList.add('open');
+
+    body.querySelectorAll('#evtHours button').forEach((b) => {
+      b.addEventListener('click', () => {
+        body.querySelectorAll('#evtHours button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        state.evt.hours = Number(b.dataset.h);
+        loadEventHistory();
+      });
+    });
+    body.querySelectorAll('#evtLevel button').forEach((b) => {
+      b.addEventListener('click', () => {
+        body.querySelectorAll('#evtLevel button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        state.evt.level = b.dataset.l;
+        loadEventHistory();
+      });
+    });
+    let timer = null;
+    $('evtQ').addEventListener('input', (e) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { state.evt.q = e.target.value; loadEventHistory(); }, 300);
+    });
+
+    loadEventDays();
+    loadEventHistory();
+  }
+
+  async function loadEventHistory() {
+    const box = $('evtList');
+    if (!box) return;
+    const q = state.evt.q ? '&q=' + encodeURIComponent(state.evt.q) : '';
+    const lv = state.evt.level ? '&level=' + state.evt.level : '';
+    try {
+      const rows = await fetchJSON(
+        `/api/events/history?hours=${state.evt.hours}&limit=300${lv}${q}`);
+      if (!rows.length) {
+        box.innerHTML = '<li class="evt-empty">这个时间窗里没有事件</li>';
+        return;
+      }
+      box.innerHTML = rows.map((e) => {
+        const d = new Date(e.t * 1000);
+        const day = `${d.getMonth() + 1}/${d.getDate()}`;
+        const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        return `<li class="evt-row ${esc(e.level || 'info')}">
+          <span class="evt-t"><b>${hm}</b><i>${day}</i></span>
+          <span class="evt-dot"></span>
+          <span class="evt-x">
+            <span class="evt-text">${esc(e.text)}</span>
+            ${e.detail ? `<span class="evt-detail">${esc(e.detail)}</span>` : ''}
+          </span>
+        </li>`;
+      }).join('');
+    } catch (err) {
+      box.innerHTML = '<li class="evt-empty">历史库暂时读不到（容器里 /data 是否可写？）</li>';
+    }
+  }
+
+  async function loadEventDays() {
+    const box = $('evtDays');
+    if (!box) return;
+    try {
+      const days = await fetchJSON('/api/events/days');
+      if (!days.length) { box.innerHTML = ''; return; }
+      const max = Math.max(...days.map((d) => d.n), 1);
+      box.innerHTML = days.slice(0, 14).reverse().map((d) => {
+        const pct = Math.max((d.n / max) * 100, 3);
+        const cls = d.crit ? 'crit' : d.warn ? 'warn' : '';
+        const md = d.day.slice(5).replace('-', '/');
+        return `<span class="evt-day ${cls}" style="--h:${pct}%" title="${d.day} · ${d.n} 条（严重 ${d.crit} / 警告 ${d.warn}）">
+          <i></i><em>${md}</em></span>`;
+      }).join('');
+    } catch (e) { box.innerHTML = ''; }
+  }
+
+  $('evtHistory').addEventListener('click', openEventHistory);
+  document.querySelectorAll('#wanRange button').forEach((b) => {
+    b.addEventListener('click', () => loadWide(b.dataset.r));
+  });
+
+  let wallSearchTimer = null;
+  $('wallSearch').addEventListener('input', (e) => {
+    clearTimeout(wallSearchTimer);
+    const v = e.target.value;
+    wallSearchTimer = setTimeout(() => {
+      state.wallQ = v;
+      if (state.snap) renderWall(state.snap.devices || [], state.snap.summary);
+    }, 200);
+  });
+
   /* ---------------- 数据接入 ---------------- */
+  // 首屏不等 SSE：直接拉一次快照。挂墙面板打开就要有数，
+  // 而且 headless 截图（scripts/shot_noc.py）在 load 事件时就拍，等 SSE 会拍出空页。
+  async function bootstrapSnapshot() {
+    try {
+      const snap = await fetchJSON('/api/snapshot');
+      if (!state.snap) {
+        buildFilter(snap.summary);
+        render(snap);
+      }
+      // ?sheet=events 直接展开事件历史（分享链接、截图都用得上）
+      try {
+        if (new URLSearchParams(location.search).get('sheet') === 'events') openEventHistory();
+      } catch (e) { /* 老浏览器 */ }
+    } catch (e) { /* SSE 连接会补上 */ }
+  }
+
   async function bootstrapHistory() {
     try {
       const r = await fetch('/api/history?minutes=2');
       const rows = await r.json();
+      if (!rows.length) return;
       state.series.down = rows.map((x) => x.wan_down);
       state.series.up = rows.map((x) => x.wan_up);
       drawChart();
     } catch (e) { /* 忽略 */ }
   }
 
+  // ?nostream=1：截图/离线预览用，不连 SSE、不起定时器，
+  // 这样 headless 可以安全地用 --virtual-time-budget 等首屏数据落地
+  const NOSTREAM = (function () {
+    try { return new URLSearchParams(location.search).has('nostream'); } catch (e) { return false; }
+  })();
+
   let sse = null;
   function connect() {
+    if (NOSTREAM) return;
     if (sse) sse.close();
     sse = new EventSource('/api/stream');
     sse.onmessage = (ev) => {
@@ -1232,7 +1724,40 @@
   }
 
   buildTopo();
+  // ?view=network|compute|clients 直接落到对应页签（截图与分享用）
+  let startView = state.view;
+  try {
+    const qv = new URLSearchParams(location.search).get('view');
+    if (qv && VIEWS.indexOf(qv) >= 0) startView = qv;
+  } catch (e) { /* 老浏览器 */ }
+  setView(startView);
+  // ?range=2m|1h|24h 直接定住外网曲线的时间窗
+  try {
+    const qr = new URLSearchParams(location.search).get('range');
+    if (qr && RANGE_TIP[qr]) loadWide(qr);
+  } catch (e) { /* 老浏览器 */ }
+  bootstrapSnapshot();
   bootstrapHistory();
+
+  // 历史指标每 5 分钟拉一次就够：本身就是 60 秒一采样、5 分钟一聚合
+  loadPveChart();
+  const refreshStore = () => {
+    fetchJSON('/api/store').then((s) => {
+      const se = $('sumEvt');
+      if (se && s && s.ok) se.textContent = s.events;
+    }).catch(() => {});
+  };
+  refreshStore();
+  if (!NOSTREAM) setInterval(() => {
+    state.metrics = null;
+    if (state.view === 'compute') loadPveChart();
+    if (state.wanRange === '24h') loadWide('24h');
+    refreshStore();
+  }, 300000);
+
   connect();
-  window.addEventListener('resize', drawChart);
+  window.addEventListener('resize', () => {
+    drawChart();
+    drawPveChart(state.metrics || []);
+  });
 })();
