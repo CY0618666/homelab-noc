@@ -179,18 +179,49 @@
       </section>
     </aside>
 
-    <main class="stage">
+    <main class="briefs" id="briefs">
+      <article class="brief b-net" data-go="network" role="button" tabindex="0">
+        <div class="b-head">
+          <h3>网络</h3>
+          <span class="b-sub" id="bNetSub">—</span>
+          <i class="b-go">详情 ›</i>
+        </div>
+        <div class="b-body" id="bNet"></div>
+      </article>
+
+      <article class="brief b-compute" data-go="compute" role="button" tabindex="0">
+        <div class="b-head">
+          <h3>算力</h3>
+          <span class="b-sub" id="bPveSub">—</span>
+          <i class="b-go">详情 ›</i>
+        </div>
+        <div class="b-body" id="bPve"></div>
+      </article>
+
+      <article class="brief b-clients" data-go="clients" role="button" tabindex="0">
+        <div class="b-head">
+          <h3>终端</h3>
+          <span class="b-sub" id="bCliSub">—</span>
+          <i class="b-go">详情 ›</i>
+        </div>
+        <div class="b-body" id="bCli"></div>
+      </article>
+    </main>
+
+    <section class="stage">
       <div class="stage-head">
-        <div class="sh-left"><h2>物理拓扑</h2><span class="hint">链路数值 = 交换机端口实测流量 · 光点速度随流量变化</span></div>
+        <div class="sh-left"><h2>物理拓扑</h2><span class="hint">链路数值 = 交换机端口实测</span></div>
         <div class="legend">
           <span class="lg-item"><i class="ln wan"></i>外网</span>
-          <span class="lg-item"><i class="ln lan"></i>千兆主干</span>
-          <span class="lg-item"><i class="ln hairpin"></i>发卡弯回程</span>
-          <span class="lg-item"><i class="ln bypass"></i>二层旁路</span>
+          <span class="lg-item"><i class="ln lan"></i>主干</span>
+          <span class="lg-item"><i class="ln hairpin"></i>回程</span>
+          <span class="lg-item"><i class="ln bypass"></i>旁路</span>
         </div>
       </div>
-      <svg id="topo" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet"></svg>
-    </main>
+      <div class="topo-wrap">
+        <svg id="topo" viewBox="0 0 470 730" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </section>
   </div>
 
   <!-- ===================== 网络 ===================== -->

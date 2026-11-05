@@ -106,6 +106,14 @@
     return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + u[i];
   }
 
+  // 拓扑端口上的极短速率：5 个口并排，只有 52 用户单位宽，写不下 KB/s
+  function fmtRateTiny(bps) {
+    if (!bps || bps < 1) return '';
+    if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
+    if (bps >= 1024) return Math.round(bps / 1024) + 'K';
+    return Math.round(bps) + 'B';
+  }
+
   function fmtBytes(b) {
     if (!b) return '0 B';
     const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -160,15 +168,17 @@
   // 通用结构与坐标写在这里；节点上显示的文字由 config.local.json 的 topology 段
   // 通过 /api/snapshot 的 site.topology 下发覆盖（见 applySiteLabels）。
   // 因此仓库里不含任何内网地址。
+  // 竖向紧凑排布：viewBox 只有 520×560，塞进右列窄栏。
+  // SVG 里的字号是"用户单位"，viewBox 越小、缩放到屏幕后越大，所以字能比原来大。
   const NODES = {
-    ont:    { x: 470, y: 72,  w: 176, title: '光猫',        sub: '桥接 · 2 路出口', probe: null },
-    iptv:   { x: 800, y: 72,  w: 168, title: 'IPTV 机顶盒',  sub: '独立链路',        probe: null },
-    ikuai:  { x: 470, y: 190, w: 176, title: 'iKuai 主路由', sub: '硬件直通',        probe: 'ikuai' },
-    switch: { x: 470, y: 306, w: 196, title: '2.5G PoE 交换机', sub: '5 口 · 2.5G', probe: 'switch', ports: 5 },
-    apsub:  { x: 148, y: 434, w: 152, title: '子 AP',        sub: 'PoE 供电',        probe: 'apsub' },
-    apmain: { x: 396, y: 434, w: 152, title: '主 AP',        sub: 'Mesh 主节点',     probe: 'apmain' },
-    pve:    { x: 690, y: 434, w: 168, title: 'PVE 宿主机',   sub: 'vmbr0 管理口',    probe: 'pve' },
-    nas:    { x: 396, y: 542, w: 176, title: 'NAS',           sub: '双 2.5G',         probe: 'nas' },
+    ont:    { x: 140, y: 70,  w: 190, title: '光猫',        sub: '桥接 · 2 路出口', probe: null },
+    iptv:   { x: 375, y: 70,  w: 170, title: 'IPTV 机顶盒',  sub: '独立链路',        probe: null },
+    ikuai:  { x: 140, y: 200, w: 190, title: 'iKuai 主路由', sub: '硬件直通',        probe: 'ikuai' },
+    switch: { x: 140, y: 330, w: 240, title: '2.5G PoE 交换机', sub: '5 口 · 2.5G', probe: 'switch', ports: 5 },
+    apsub:  { x: 80,  y: 520, w: 140, title: '子 AP',        sub: 'PoE 供电',        probe: 'apsub' },
+    apmain: { x: 235, y: 520, w: 140, title: '主 AP',        sub: 'Mesh 主节点',     probe: 'apmain' },
+    pve:    { x: 390, y: 520, w: 140, title: 'PVE 宿主机',   sub: 'vmbr0 管理口',    probe: 'pve' },
+    nas:    { x: 235, y: 660, w: 140, title: 'NAS',           sub: '双 2.5G',         probe: 'nas' },
   };
   const NH = 54;
 
@@ -230,11 +240,13 @@
     const paths = [
       { id: 'lk-wan', cls: 'wan', d: `M${NODES.ont.x},${NODES.ont.y + NH / 2} L${NODES.ikuai.x},${NODES.ikuai.y - NH / 2}`, arrow: true },
       { id: 'lk-iptv', cls: 'bypass', d: `M${NODES.ont.x + NODES.ont.w / 2},${NODES.ont.y} L${NODES.iptv.x - NODES.iptv.w / 2},${NODES.iptv.y}`, arrow: true },
-      { id: 'lk-lan', cls: 'lan', d: `M${NODES.ikuai.x},${NODES.ikuai.y + NH / 2} L${NODES.ikuai.x},${NODES.switch.y - NH / 2 - 26} L${p5.x},${NODES.switch.y - NH / 2 - 26} L${p5.x},${p5.y}`, arrow: true },
-      { id: 'lk-hairpin', cls: 'hairpin', d: `M${p4.x},${p4.y} C${p4.x},${p4.y + 66} ${NODES.pve.x - 10},${NODES.pve.y - 96} ${NODES.pve.x},${NODES.pve.y - NH / 2}`, arrow: true },
-      { id: 'lk-apsub', cls: 'lan', d: `M${p1.x},${p1.y} L${p1.x},${NODES.apsub.y - 34} L${NODES.apsub.x},${NODES.apsub.y - 34} L${NODES.apsub.x},${NODES.apsub.y - NH / 2}`, arrow: true },
-      { id: 'lk-apmain', cls: 'lan', d: `M${p2.x},${p2.y} L${p2.x},${NODES.apmain.y - 34} L${NODES.apmain.x},${NODES.apmain.y - 34} L${NODES.apmain.x},${NODES.apmain.y - NH / 2}`, arrow: true },
-      { id: 'lk-nas-wire', cls: 'bypass', d: `M${NODES.apmain.x},${NODES.apmain.y + NH / 2} L${NODES.apmain.x},${NODES.nas.y - NH / 2}`, arrow: false },
+      // 主干：路由 → 口 5
+      { id: 'lk-lan', cls: 'lan', d: `M${NODES.ikuai.x},${NODES.ikuai.y + NH / 2} L${NODES.ikuai.x},270 L${p5.x},270 L${p5.x},${NODES.switch.y - NH / 2}`, arrow: true },
+      // 口 4 → PVE，走最上面那条横线
+      { id: 'lk-hairpin', cls: 'hairpin', d: `M${p4.x},${p4.y} L${p4.x},400 L${NODES.pve.x},400 L${NODES.pve.x},${NODES.pve.y - NH / 2}`, arrow: true },
+      { id: 'lk-apsub', cls: 'lan', d: `M${p1.x},${p1.y} L${p1.x},418 L${NODES.apsub.x},418 L${NODES.apsub.x},${NODES.apsub.y - NH / 2}`, arrow: true },
+      { id: 'lk-apmain', cls: 'lan', d: `M${p2.x},${p2.y} L${p2.x},430 L${NODES.apmain.x},430 L${NODES.apmain.x},${NODES.apmain.y - NH / 2}`, arrow: true },
+      { id: 'lk-nas-wire', cls: 'bypass', d: `M${NODES.apmain.x},${NODES.apmain.y + NH / 2} L${NODES.nas.x},${NODES.nas.y - NH / 2}`, arrow: false },
     ];
 
     for (const p of paths) {
@@ -256,13 +268,11 @@
     }
 
     const labels = [
-      { x: 300, y: 132, t: 'WAN 2.5G', cls: 'tag', anchor: 'end' },
-      { x: 596, y: 132, t: 'IPTV 独立链路', cls: 'tag', anchor: 'start' },
-      { x: 580, y: 246, t: 'LAN1 · 口 5 直通', cls: 'tag', anchor: 'start' },
-      { x: 730, y: 366, t: '口 4 回程 → NIC3 → vmbr0', cls: 'tag-warn', anchor: 'end' },
-      { x: 186, y: 392, t: '口 1 · PoE', cls: 'tag', anchor: 'start' },
-      { x: 424, y: 392, t: '口 2', cls: 'tag', anchor: 'start' },
-      { x: 430, y: 500, t: '二层旁路 · 不经 iKuai', cls: 'tag', anchor: 'start' },
+      { x: 154, y: 133, t: 'WAN 2.5G', cls: 'tag', anchor: 'start' },
+      { x: 375, y: 112, t: 'IPTV 独立链路', cls: 'tag', anchor: 'middle' },
+      { x: 244, y: 290, t: 'LAN1 · 口 5 直通', cls: 'tag', anchor: 'start' },
+      { x: 346, y: 391, t: '口 4 回程 → PVE', cls: 'tag-warn', anchor: 'end' },
+      { x: 247, y: 590, t: '二层旁路 · 不经 iKuai', cls: 'tag', anchor: 'start' },
     ];
     for (const l of labels) {
       const t = document.createElementNS(SVG_NS, 'text');
@@ -321,8 +331,7 @@
           num.setAttribute('x', cx);
           num.setAttribute('y', n.y + NH / 2 + 13);
           num.setAttribute('text-anchor', 'middle');
-          num.setAttribute('class', 'tag');
-          num.setAttribute('style', 'font-size:8px');
+          num.setAttribute('class', 'port-no');
           num.textContent = String(i + 1);
           g.appendChild(num);
 
@@ -339,16 +348,16 @@
     rateWan.setAttribute('id', 'rt-wan');
     links.appendChild(rateWan);
 
-    const rateLan = mkText(NODES.ikuai.x, NODES.ikuai.y + NH / 2 + 15, 'node-rate', 'middle', '');
+    const rateLan = mkText(NODES.ikuai.x + 102, NODES.ikuai.y + 6, 'node-rate', 'start', '');
     rateLan.setAttribute('id', 'rt-lan');
     links.appendChild(rateLan);
 
-    const rateHair = mkText(716, 350, 'node-rate', 'start', '');
+    const rateHair = mkText(NODES.pve.x, NODES.pve.y + NH / 2 + 22, 'node-rate', 'middle', '');
     rateHair.setAttribute('id', 'rt-hair');
     rateHair.setAttribute('style', 'fill:var(--warn)');
     links.appendChild(rateHair);
 
-    const rateNas = mkText(NODES.nas.x, NODES.nas.y + NH / 2 + 20, 'node-rate', 'middle', '');
+    const rateNas = mkText(NODES.nas.x, NODES.nas.y + NH / 2 + 18, 'node-rate', 'middle', '');
     rateNas.setAttribute('id', 'rt-nas');
     rateNas.setAttribute('style', 'fill:var(--violet)');
     links.appendChild(rateNas);
@@ -408,7 +417,7 @@
       if (box) box.setAttribute('class', 'portbox' + (p && p.up ? ' up' : ''));
       if (txt) {
         const total = sum(p);
-        txt.textContent = (!p || !p.up || total < 1024) ? '' : fmtRate(total);
+        txt.textContent = '';  // 端口速率在摘要卡和网络页里看，拓扑上 5 个口排不下
       }
     }
 
@@ -677,6 +686,7 @@
     drawChart();
     updateTopo(snap);
     renderSummary(snap);
+    renderBriefs(snap);
 
     const h = snap.health || { score: 0, level: 'ok', issues: [] };
     const hb = $('healthBox');
@@ -1058,16 +1068,38 @@
 
   function renderEvents(list) {
     const ul = $('eventList');
-    $('eventHint').textContent = list.length ? list.length + ' 条' : '';
     if (!list.length) {
+      $('eventHint').textContent = '';
       ul.innerHTML = '<li class="empty">暂无事件</li>';
       return;
     }
-    ul.innerHTML = list.slice(0, 24).map((e) => {
+    // 连续重复的事件（如每隔几分钟一次的"外网流量突增"）折叠成一条，
+    // 时间显示最新一次、右侧标次数——否则整列都是同一句话，翻不出别的信息
+    const rows = [];
+    list.forEach((e) => {
+      const last = rows[rows.length - 1];
+      if (last && last.text === e.text && (last.level || '') === (e.level || '')) {
+        last.n++; last.t = e.t;
+        return;
+      }
+      rows.push({ text: e.text, level: e.level, kind: e.kind, detail: e.detail, t: e.t, n: 1 });
+    });
+    // 折叠得太狠时会只剩一两行、整列空掉——那种情况干脆按原始列表铺开
+    if (rows.length < 6 && list.length - rows.length > 3) {
+      rows.length = 0;
+      list.forEach((e) => rows.push({
+        text: e.text, level: e.level, kind: e.kind, detail: e.detail, t: e.t, n: 1,
+      }));
+    }
+    $('eventHint').textContent = rows.length < list.length
+      ? `${rows.length} 类 / ${list.length} 条` : list.length + ' 条';
+    ul.innerHTML = rows.slice(0, 24).map((e) => {
       const d = new Date(e.t * 1000);
       const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
       const cls = (e.level || '') + (e.kind === 'ha' ? ' ha' : '');
-      return `<li class="${cls}" title="${esc(e.detail || '')}"><span class="et">${hm}</span><span class="ex">${esc(e.text)}</span></li>`;
+      const n = e.n > 1 ? `<span class="ex-n">×${e.n}</span>` : '';
+      return `<li class="${cls}" title="${esc(e.detail || '')}"><span class="et">${hm}</span>`
+        + `<span class="ex">${esc(e.text)}</span>${n}</li>`;
     }).join('');
   }
 
@@ -1535,6 +1567,131 @@
     b.addEventListener('click', () => setView(b.dataset.view));
   });
 
+  // 概览摘要卡：点卡片任意位置直接进对应页签（键盘 Enter / 空格同样可用）
+  document.querySelectorAll('.brief').forEach((card) => {
+    const go = () => setView(card.dataset.go);
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+  });
+
+  /* ==========================================================================
+     概览摘要卡：把网络 / 算力 / 终端三个二级页的要点提到第一屏，
+     只留"要不要点进去"的判断依据，细节留给页签。
+     ========================================================================== */
+  function briefRow(k, v, extra, cls) {
+    return `<div class="brow"><span class="bk">${k}</span><span class="bv">${v}</span>`
+      + (extra ? `<i class="bx ${cls || ''}">${extra}</i>` : '') + `</div>`;
+  }
+
+  function renderBriefs(snap) {
+    const s = snap.summary || {};
+    const wan = snap.wan || {};
+    const ik = snap.ikuai || {};
+    const sw = snap.switch || {};
+    const pve = snap.pve || {};
+    const loc = snap.local || {};
+    const wifi = snap.miwifi || {};
+    const probes = {};
+    (snap.probes || []).forEach((p) => { probes[p.key] = p; });
+    const rtt = (k) => (probes[k] && probes[k].up && probes[k].rtt != null)
+      ? probes[k].rtt.toFixed(1) + ' ms' : '—';
+
+    /* ---- 网络 ---- */
+    const ports = sw.ports || [];
+    const upN = sw.up_count != null ? sw.up_count : ports.filter((p) => p.up).length;
+    const totN = sw.total_ports || ports.length || 5;
+    const trunk = ports.find((p) => p.no === 5);
+    const trunkRate = trunk ? (trunk.rx || 0) + (trunk.tx || 0) : 0;
+    const wanOk = wan.ok !== false;
+    $('bNetSub').textContent = wanOk ? '外网在线' : '外网断线';
+    $('bNetSub').style.color = wanOk ? 'var(--ok)' : 'var(--crit)';
+    const portHTML = ports.map((p) => {
+      const rate = (p.rx || 0) + (p.tx || 0);
+      return `<div class="bport${p.up ? '' : ' off'}">`
+        + `<span class="bp-led${p.up ? ' up' : ''}"></span>`
+        + `<span class="bp-no">${p.no}</span>`
+        + `<span class="bp-name">${esc(p.role || '空置')}</span>`
+        + `<span class="bp-spd">${p.up ? esc(p.speed || '') : '—'}</span>`
+        + `<span class="bp-rate">${p.up ? fmtRate(rate) : '—'}</span>`
+        + `</div>`;
+    }).join('');
+    $('bNet').innerHTML =
+      `<div class="bbig"><b class="${wanOk ? 'ok' : 'crit'}">${upN}`
+      + `<span style="font-size:16px;color:var(--txt-3)">/${totN}</span></b>`
+      + `<span>端口在用</span><i class="bx">主干 ${fmtRate(trunkRate)}</i></div>`
+      + briefRow('外网', esc(wan.public_ip || wan.ip || '—'), ik.uptime ? '跑 ' + fmtDur(ik.uptime) : '')
+      + briefRow('连接', (ik.conn_total || 0).toLocaleString() + ' 个',
+        `TCP ${ik.conn_tcp || 0} · UDP ${ik.conn_udp || 0}`)
+      + `<div class="bhr"></div>` + portHTML + `<div class="bhr"></div>`
+      + briefRow('延迟', `iKuai ${rtt('ikuai')}`, `PVE ${rtt('pve')}`);
+
+    /* ---- 算力 ---- */
+    const cpu = pve.cpu || 0;
+    const memPct = pve.mem_total ? (pve.mem_used || 0) / pve.mem_total * 100 : 0;
+    const guests = pve.guests || [];
+    const runN = guests.filter((g) => g.status === 'running').length;
+    const volPct = loc.vol_total ? (loc.vol_used || 0) / loc.vol_total * 100 : 0;
+    const lvl = (v) => (v > 88 ? 'crit' : v > 70 ? 'warn' : '');
+    const bar = (k, v, txt) =>
+      `<div class="bmeter"><span class="bm-k">${k}</span>`
+      + `<span class="g-bar"><i class="${lvl(v)}" style="width:${Math.min(100, v).toFixed(1)}%"></i></span>`
+      + `<span class="bm-v">${txt}</span></div>`;
+    $('bPveSub').textContent = pve.node ? `${pve.node} · ${pve.cpus || 0} 核` : '—';
+    $('bPve').innerHTML =
+      bar('CPU', cpu, cpu.toFixed(0) + '%')
+      + bar('内存', memPct, memPct.toFixed(0) + '%')
+      + bar('存储', volPct, volPct.toFixed(0) + '%')
+      + `<div class="bhr"></div>`
+      + guests.map((g) => `<div class="bguest">`
+        + `<span class="bg-led${g.status === 'running' ? ' on' : ''}"></span>`
+        + `<span class="bg-name">${esc(g.name || ('vmid ' + g.vmid))}</span>`
+        + `<span class="bg-v">${g.status === 'running' ? (g.cpu || 0).toFixed(0) + '%' : '停止'}</span>`
+        + `<span class="bg-v dim">${g.status === 'running' ? fmtBytes(g.mem || 0) : '—'}</span>`
+        + `</div>`).join('');
+
+    /* ---- 终端 ---- */
+    const online = s.online || 0, known = s.known || 0;
+    const offN = Math.max(0, (known || 0) - online);
+    $('bCliSub').textContent = offN ? `${offN} 台离线` : '全部在线';
+    $('bCliSub').style.color = offN ? 'var(--warn)' : 'var(--txt-3)';
+    const cats = CAT_ORDER.map((c) => {
+      const n = (s.by_cat || {})[c] || 0;
+      return `<span class="bcat"><i style="background:${CAT_COLOR[c]}"></i>${CAT_LABEL[c]}<b>${n}</b></span>`;
+    }).join('');
+    const apMap = {};
+    (snap.devices || []).forEach((d) => {
+      if (d.wifi_ap) apMap[d.wifi_ap] = (apMap[d.wifi_ap] || 0) + 1;
+    });
+    const apHTML = Object.keys(apMap).length
+      ? Object.entries(apMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `<span class="bap-item">${esc(k)}<b>${v}</b></span>`).join('')
+      : `<span class="bap-item">无线 <b>${s.wifi_online || 0}</b></span>`;
+    // 当前最活跃的三台：按瞬时收发排序，比"在线多少台"更能看出谁在占带宽
+    const top = (snap.devices || [])
+      .map((d) => ({ d, rate: (d.up || 0) + (d.down || 0) }))
+      .filter((x) => x.rate > 0)
+      .sort((a, b) => b.rate - a.rate)
+      .slice(0, 3)
+      .map((x) => `<div class="bport"><span class="bp-led up"></span>`
+        + `<span class="bp-name">${esc(x.d.display || x.d.ip)}</span>`
+        + `<span class="bp-rate">${fmtRate(x.rate)}</span></div>`).join('');
+    $('bCli').innerHTML =
+      `<div class="b2col"><div class="b2l">`
+      + `<div class="bbig"><b class="${offN ? 'warn' : 'ok'}">${online}`
+      + `<span style="font-size:16px;color:var(--txt-3)">/${known}</span></b>`
+      + `<span>在线</span></div>`
+      + `<div class="bx" style="margin:0;font-size:13px">无线 ${s.wifi_online || 0} · 有线 ${Math.max(0, online - (s.wifi_online || 0))}`
+      + (offN ? ` · 离线 <b style="color:var(--warn)">${offN}</b>` : '') + `</div>`
+      + `<div class="bcats">${cats}</div>`
+      + `</div><div class="b2r">`
+      + `<div class="bap">${apHTML}</div>`
+      + (top ? `<div class="bhr"></div>${top}` : '')
+      + `</div></div>`;
+  }
+
   /* ==========================================================================
      底部汇总：每类多少台，扫一眼就知道"少了一个"
      ========================================================================== */
@@ -1760,4 +1917,16 @@
     drawChart();
     drawPveChart(state.metrics || []);
   });
+
+  // 布局自检：?probe=1 时把关键尺寸写进 <title>，headless --dump-dom 能直接读
+  if (location.search.indexOf('probe=1') >= 0) {
+    const dim = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return sel + '=null';
+      const r = el.getBoundingClientRect();
+      return sel + '=' + Math.round(r.width) + 'x' + Math.round(r.height);
+    };
+    document.title = 'PROBE ' + ['.v-overview', '.stage', '.stage-head', '.topo-wrap', '#topo', '.briefs']
+      .map(dim).join(' ');
+  }
 })();

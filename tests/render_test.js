@@ -125,6 +125,7 @@ global.window = {
   },
 };
 global.EventSource = global.window.EventSource;
+global.location = { search: '', href: 'http://localhost/', pathname: '/' };
 global.fetch = () => Promise.resolve({ json: () => Promise.resolve([]) });
 global.setInterval = () => 0;
 global.setTimeout = (fn) => { try { fn(); } catch (e) {} return 0; };
@@ -225,6 +226,9 @@ const checks = [
   ['vmList', (v) => v.innerHTML.includes('<tr')],
   ['wallBody', (v) => v.innerHTML.includes('wall-cell')],
   ['eventList', (v) => v.innerHTML.length > 0],
+  ['bNet', (v) => v.innerHTML.includes('bport')],
+  ['bPve', (v) => v.innerHTML.includes('bmeter')],
+  ['bCli', (v) => v.innerHTML.includes('b2col')],
 ];
 for (const [id, fn] of checks) {
   const el = registry[id];
