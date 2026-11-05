@@ -640,6 +640,15 @@ body {
 .apt-nm { font-weight: 500; white-space: nowrap; }
 .apt-n { margin-left: auto; font-family: var(--mono); font-weight: 500; color: var(--cyan); }
 
+/* 未定位挂载点：它不是一台 AP，整体降级成虚线骨架，
+   别让人误以为家里还藏着第三台无线设备 */
+.apt-loose { margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.apt-loose .apt-node { font-size: 13px; color: var(--txt-2); }
+.apt-loose .apt-led { background: transparent; border: 1px dashed var(--txt-3); }
+.apt-loose .apt-n { color: var(--txt-3); }
+/* loose 盒子自己已经有一条虚线了，紧跟其后的说明别再画第二条 */
+.apt-loose + .apt-note { border-top: 0; padding-top: 2px; margin-top: 0; }
+
 .apt-kids { list-style: none; margin: 2px 0 0; padding: 0; }
 .ak {
   position: relative; display: flex; align-items: center; gap: 7px;
@@ -664,9 +673,16 @@ body {
 .ap-empty { font-size: 13px; color: var(--txt-3); }
 /* 归属查不到的无线设备：单独说明，不塞进任何一台 AP 底下 */
 .apt-note {
+  display: flex; align-items: flex-start; gap: 6px;
   margin-top: 2px; padding-top: 7px; border-top: 1px dashed var(--line);
-  font-size: 12px; color: var(--txt-3); line-height: 1.5;
+  font-size: 12.5px; color: var(--txt-3); line-height: 1.5;
 }
+/* 未定位挂载点：虚线小圈，跟实心的 AP 节点区分开 */
+.apt-note > i {
+  flex-shrink: 0; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%;
+  border: 1px dashed var(--txt-3); opacity: 0.8;
+}
+.apt-note b { color: var(--txt-2); font-weight: 600; }
 
 /* 事件流里的重复次数 */
 .ex-n { margin-left: auto; font-size: 12px; color: var(--txt-3); font-family: var(--mono); flex-shrink: 0; }

@@ -50,6 +50,12 @@ _wifi_map = {}
 # 接入方式只能以 AP 自己报的 connectionType 为准
 _wired_map = {}
 
+# 拿不到实测数据时按类别推断接入方式。
+# 服务器 / 交换机 / NAS / AP 本身不可能走无线；家电和传感器没有网口，
+# 家里也没有 IoT 专用 SSID（已确认），所以智能家居一律按无线算。
+# media / client 两类不猜——电视可能插网线，手机平板也可能，留空更诚实。
+_GUESS_LINK = {"infra": "wired", "net": "wired", "smart": "wifi"}
+
 
 def _classify(dev):
     ip = dev.get("ip", "")
@@ -79,10 +85,22 @@ def _classify(dev):
         "known": out.get("known", False),
     })
     dev["cat_label"] = assets.CATEGORY_LABEL.get(dev["cat"], "其他")
-    # 配置里手写了 link 就以它为准：AP 报不到的设备（IoT 专用 SSID、
-    # 或 AP 的客户端表干脆不列）只能由人指定，别让面板瞎猜
+    # ---- 接入方式：三段式，优先级 配置 > AP 实测 > 类别推断 ----
+    #
+    # 为什么只能这样：iKuai 那边所有终端的 iface 恒为 lan1（apmac/ssid/signal
+    # 只对爱快自家 AP 有值），小米在 Mesh / 有线中继模式下又只维护一份很小的
+    # 历史台账——实测主 AP 7 条（其中在线 2）、子 AP 2 条，没有任何一个接口
+    # 能给出完整的 802.11 关联站表。所以除极少数被 AP 报到的设备外，
+    # 全线都只能按类别推断，用 conn_src 把来源标出来，别让推断冒充实测。
     if out.get("link") in ("wifi", "wired"):
         dev["conn"] = out["link"]
+        dev["conn_src"] = "cfg"
+    elif dev.get("conn") in ("wifi", "wired"):
+        dev["conn_src"] = "ap"
+    else:
+        guess = _GUESS_LINK.get(dev["cat"])
+        dev["conn"] = guess or ""
+        dev["conn_src"] = "guess" if guess else ""
     return dev
 
 

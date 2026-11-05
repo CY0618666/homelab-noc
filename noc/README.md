@@ -82,7 +82,8 @@ CPU/内存/存储三条水位与各 guest 占用、在线数与分类、无线�
 | 小米 AP | `POST /cgi-bin/luci/api/xqsystem/login` 明文 `logtype=1` 即可拿 stok；真实信道在 `channelInfo.channel`，顶层 `channel` 字段恒为 `"0"`（配置值=自动）。子 AP 自己报不出在线数，要从**主 AP 的 `topo_graph.leafs`** 反查。 |
 | 小米 AP 客户端表 | **必须用 `/api/misystem/device_list`**。老接口 `/api/xqsystem/device_list` 在 BE 系固件上只吐 1 条（实测主 AP 报 9 台、它只给 1 台）。新接口的 `connectionType` 是接入方式：`1`=2.4G、`2`=5G、`4`=有线，`events[0].text` 里还写着「5GHz接入」。`topo_graph.onlines` 是登记过的设备总数（报 14），真实在线数在 `status.count.online`（2）。 |
 | 接入方式别信 iKuai | iKuai `monitor_lanip` 里所有终端的 `interface` 都是 `lan1`，`apmac`/`ssid`/`signal` 只对爱快自家 AP 有值。拿 `iface` 判有线无线，会把满屋 Wi-Fi 设备全标成有线。 |
-| IoT 设备归属 | 智能家居大多连小米的 IoT 专用 SSID，**AP 的客户端表根本不列**。这类设备只能按类别推断为无线，UI 上如实标「无线 · AP 未上报」，塞进某台 AP 底下等于编数据。 |
+| 小米 AP 台账不全 | Mesh / 有线中继模式下，AP 只维护一份很小的**历史台账**：实测主 AP `device_list` 7 条（其中在线 2）、子 AP `xqsystem/device_list` 2 条且无 IP 无名称。`device_list?limit=100`、`arp_list`、`station_list`、`client_list` 等尝试全部无效（404 或忽略参数），**拿不到完整 802.11 关联站表**。`status.count.online` 与台账在线数一致（2），`topo_graph.onlines` 才是登记总数（18），别拿它当在线数。 |
+| 接入方式只能推断 | iKuai `monitor_lanip` 里所有终端的 `interface` 都是 `lan1`，`apmac`/`ssid`/`signal`/`bssid` 全空，`uplink_addr` 是 iKuai 自己的 LAN 口 MAC。AP 台账又只覆盖 2～9 台。所以接入方式做成三段：`conn_src=ap`（AP 实测）、`cfg`（配置里写 `link`）、`guess`（按类别推断：infra/net 判有线、smart 判无线、media/client 留空）。UI 上推断结果一律标「AP 未上报」，别冒充实测。 |
 | Home Assistant | `/auth/login_flow` 的 `handler` 必须是 `["homeassistant", null]`，写成 `["homeassistant","login_flow"]` 直接 **500**。`/auth/token` 必须 **form 编码**，JSON body 会被读成空 → `unsupported_grant_type`。access_token 30 分钟过期，用 refresh_token 静默续期并落盘 `/data/ha_token.json`。 |
 
 ## 三、部署

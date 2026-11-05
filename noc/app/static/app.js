@@ -1106,27 +1106,31 @@
 
   /* ---------------- 终端墙 ---------------- */
   // 卡片第三行：优先给接入方式，有实时流量就给速率——一眼能看出"谁在占带宽"
-  // 接入方式三态。第三态很重要：AP 没报、iKuai 也看不出来时，
-  // 不能像以前那样拿 iface 一律写成"有线"（满屋 Wi-Fi 设备全被标错）。
+  // linkKind 优先用后端给的 conn（带 conn_src 标明来源），拿不到才按类别兜底，
+  // 兜底规则必须和 state.py 的 _GUESS_LINK 保持一致
   function linkKind(d) {
     if (d.conn === 'wifi') return 'wifi';
     if (d.conn === 'wired') return 'wired';
     // 服务器 / 交换机 / NAS / AP 本身不可能走无线，类别就能定死
     if (d.cat === 'infra' || d.cat === 'net') return 'wired';
-    // 智能家居（冰箱 / 洗衣机 / 空调 / 灯）没有网口，只能是无线。
-    // 它们大多连在小米的 IoT 专用 SSID 上，AP 的客户端表根本不列，只能按类别定。
+    // 智能家居（冰箱 / 洗衣机 / 空调 / 灯）没有网口，家里也没有 IoT 专网，
+    // 只能是无线。AP 的客户端表不列它们，归属只能空着。
     if (d.cat === 'smart') return 'wifi';
     return 'unknown';
   }
 
-  // 接入方式的一句话描述，卡片第三行和详情抽屉共用
+  // 接入方式的一句话描述，卡片第三行和详情抽屉共用。
+  // conn_src：ap=AP 实测、cfg=配置手写、guess=按类别推断
   function linkText(d) {
     const kind = linkKind(d);
+    const byHand = d.conn_src === 'cfg';
     if (kind === 'wifi') {
-      return d.wifi_ap ? d.wifi_ap + (d.wifi_band ? ' · ' + d.wifi_band : '') : '无线 · AP 未上报';
+      if (d.wifi_ap) return d.wifi_ap + (d.wifi_band ? ' · ' + d.wifi_band : '');
+      return byHand ? '无线 · 手工指定' : '无线 · AP 未上报';
     }
     if (kind === 'wired') {
-      return d.wifi_ap ? d.wifi_ap + ' · 有线' : '有线';
+      if (d.wifi_ap) return d.wifi_ap + ' · 有线';
+      return byHand ? '有线 · 手工指定' : '有线';
     }
     return '接入未确认';
   }
@@ -1722,23 +1726,25 @@
   function apTree(snap) {
     const devs = snap.devices || [];
     const aps = (snap.miwifi || {}).aps || [];
+    const LOOSE = '无线（未归属）';
     const byAp = {};
     const add = (k, d) => { (byAp[k] = byAp[k] || []).push(d); };
     devs.forEach((d) => {
-      if (d.conn === 'wifi') add(d.wifi_ap || '无线（未归属）', d);
+      if (d.conn === 'wifi') add(d.wifi_ap || LOOSE, d);
     });
 
     // 以 AP 采集结果为准（哪怕一台客户端都没挂也要留节点），再补上只从设备侧看到的
     const order = [];
     aps.forEach((a) => { if (a.label) order.push({ label: a.label, ok: a.ok !== false }); });
     Object.keys(byAp).forEach((k) => {
+      if (k === LOOSE) return;
       if (!order.some((o) => o.label === k)) order.push({ label: k, ok: true });
     });
-    if (!order.length) return `<div class="ap-empty">无线侧暂无数据</div>`;
+    if (!order.length && !byAp[LOOSE]) return `<div class="ap-empty">无线侧暂无数据</div>`;
 
     // 不按客户端数排序：主 AP 是入口，位置固定在最上面，
     // 数量变化时节点不跳动，扫视才有稳定的落点
-    const tree = order.map((ap) => {
+    const one = (ap, loose) => {
       const kids = (byAp[ap.label] || []).slice()
         .sort((a, b) => ((b.up || 0) + (b.down || 0)) - ((a.up || 0) + (a.down || 0)));
       const MAX = 6;
@@ -1754,23 +1760,27 @@
       }).join('');
       const more = rest > 0 ? `<li class="ak ak-more">还有 ${rest} 台</li>` : '';
       const none = !kids.length ? `<li class="ak ak-none">暂无客户端</li>` : '';
-      return `<div class="apt">
+      return `<div class="apt${loose ? ' apt-loose' : ''}">
         <div class="apt-node">
-          <i class="apt-led${ap.ok ? ' on' : ''}"></i>
-          <span class="apt-nm">${esc(ap.label)}</span>
+          <i class="apt-led${ap.ok && !loose ? ' on' : ''}"></i>
+          <span class="apt-nm">${esc(loose ? '未定位挂载点' : ap.label)}</span>
           <b class="apt-n">${kids.length}</b>
         </div>
         <ul class="apt-kids">${rows}${more}${none}</ul>
       </div>`;
-    }).join('');
+    };
+    const tree = order.map((ap) => one(ap, false)).join('');
+    // 未归属的单独放最后、换一套骨架样式：它不是一个 AP，别让人误以为
+    // 家里还藏着第三台无线设备。里面基本都是 IoT——冰箱洗衣机空调这一类。
+    const looseBox = byAp[LOOSE] ? one({ label: LOOSE, ok: false }, true) : '';
 
-    // 连得上、但 AP 的客户端表里查不到归属的（多为 IoT 专用 SSID 上的设备）。
-    // 不硬塞进某台 AP 下面，否则等于编数据；单独说一句，让看的人知道总数对得上。
-    const loose = devs.filter((d) => linkKind(d) === 'wifi' && !d.wifi_ap).length;
-    const note = loose
-      ? `<div class="apt-note">另有 ${loose} 台无线设备不在 AP 客户端列表里（IoT 专用 SSID）</div>`
+    // 为什么会有这么一堆"未定位"：小米在 Mesh / 有线中继下只维护一份很小的
+    // 历史台账（实测主 AP 7 条、子 AP 2 条），绝大多数关联设备根本不列。
+    // 不硬塞进某台 AP 下面，否则等于编数据。
+    const note = looseBox
+      ? `<div class="apt-note"><i></i><span>这批设备确定是无线，但 AP 不报挂载关系，无法归到具体哪一台</span></div>`
       : '';
-    return `<div class="aptree">${tree}${note}</div>`;
+    return `<div class="aptree">${tree}${looseBox}${note}</div>`;
   }
 
   /* ==========================================================================
