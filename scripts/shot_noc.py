@@ -88,22 +88,31 @@ def main() -> int:
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-features=Translate,OptimizationHints",
+        # 面板在内网。系统代理（Clash 之类）会把 192.168.x.x 也劫走，直连才通
+        "--no-proxy-server",
         f"--user-data-dir={profile}",
         f"--window-size={args.width},{args.height}",
         f"--force-device-scale-factor={args.scale}",
         f"--screenshot={out}",
     ]
     url = args.url
+    # ?style= 参数用 & 拼接前先占位，两个参数可能都加
+    params = []
     if args.theme:
-        # 页面支持 ?theme=light|dark（index.html 首屏脚本优先读它）
+        params.append("theme=" + args.theme)
+    # 页面带 ?nostream=1 时不会连 SSE、不起定时器，这时才能安全地用
+    # --virtual-time-budget 等首屏数据落地（有 SSE 时会触发渲染进程被杀）
+    params.append("nostream=1")
+    if params:
         sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}theme={args.theme}"
+        url = url + sep + "&".join(params)
 
     print(f"浏览器  {browser}")
     print(f"目标    {url}")
     print(f"视口    {args.width}x{args.height} @{args.scale}x")
     print(f"输出    {out}")
 
+    cmd.append("--virtual-time-budget=6000")
     cmd.append(url)
 
     try:

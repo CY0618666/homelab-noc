@@ -25,6 +25,11 @@ function makeEl(tag) {
       add(c) { this._s.add(c); },
       remove(c) { this._s.delete(c); },
       contains(c) { return this._s.has(c); },
+      toggle(c, force) {
+        const on = force === undefined ? !this._s.has(c) : !!force;
+        on ? this._s.add(c) : this._s.delete(c);
+        return on;
+      },
     },
     setAttribute(k, v) { this[k] = v; },
     getAttribute(k) { return this[k]; },
@@ -84,6 +89,24 @@ global.document = {
   },
   querySelectorAll(sel) {
     if (sel === '.sbi.clickable') return sheetTriggers;
+    // 页签、时间窗、事件历史筛选：返回带 dataset 的桩元素，够 app.js 绑监听就行
+    if (sel === '#tabs .tab') {
+      return ['overview', 'network', 'compute', 'clients'].map((v) => {
+        const el = makeEl('button');
+        el.dataset = { view: v };
+        return el;
+      });
+    }
+    if (sel === '#wanRange button') {
+      return ['2m', '1h', '24h'].map((r) => {
+        const el = makeEl('button');
+        el.dataset = { r };
+        return el;
+      });
+    }
+    if (sel === '#evtHours button' || sel === '#evtLevel button') return [];
+    if (sel === '.view') return ['overview', 'network', 'compute', 'clients'].map((v) => reg('v-' + v));
+    if (sel === '.wall-cell') return [];
     return [];
   },
   body: makeEl('body'),
@@ -199,7 +222,7 @@ console.log('\n--- 抽查 ---');
 const checks = [
   ['portList', (v) => v.innerHTML.includes('port-no')],
   ['apList', (v) => v.innerHTML.includes('ap-item')],
-  ['vmList', (v) => v.innerHTML.includes('<li')],
+  ['vmList', (v) => v.innerHTML.includes('<tr')],
   ['wallBody', (v) => v.innerHTML.includes('wall-cell')],
   ['eventList', (v) => v.innerHTML.length > 0],
 ];
