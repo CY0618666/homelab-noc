@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
 import state
+import store
 from collectors import ha, ikuai, localnet, miwifi, pinger, pve, switch
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -96,6 +97,23 @@ def job_history():
     state.snapshot_history()
 
 
+def job_metrics():
+    """每 POLL_SAMPLE 秒采一条指标，作为"昨天这个时候"的回溯依据"""
+    state.sample_metrics()
+
+
+_last_prune = [0.0]
+
+
+def job_prune():
+    """一天清一次过期数据，别让库无限长"""
+    now = time.time()
+    if now - _last_prune[0] < 86400:
+        return
+    _last_prune[0] = now
+    state.prune_store()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -140,6 +158,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, state.history(minutes))
         if p == "/api/events":
             return self._send(200, state.events(int((q.get("limit") or ["50"])[0])))
+        if p == "/api/events/history":
+            return self._send(200, state.event_history(
+                int((q.get("limit") or ["200"])[0]),
+                float((q.get("hours") or ["24"])[0]),
+                (q.get("level") or [""])[0],
+                (q.get("q") or [""])[0],
+            ))
+        if p == "/api/events/days":
+            return self._send(200, state.event_days())
+        if p == "/api/metrics":
+            return self._send(200, state.metric_history(
+                float((q.get("hours") or ["24"])[0]),
+                int((q.get("step") or ["60"])[0]),
+            ))
+        if p == "/api/store":
+            return self._send(200, store.stats())
         if p == "/api/health":
             return self._send(200, {"ok": True, "uptime": int(time.time() - state._state["started"])})
         if p == "/api/stream":
@@ -189,6 +223,9 @@ def main():
     print("=" * 58, flush=True)
     print(" Homelab NOC  http://%s:%d" % (config.HOST, config.PORT), flush=True)
     print(" iKuai: %s   PVE: %s" % (config.IKUAI_URL, config.PVE_URL), flush=True)
+    ok = state.init_store()
+    print(" 历史库: %s (%s)" % (config.DB_PATH, "已连接" if ok else "不可用，仅内存模式"),
+          flush=True)
     print("=" * 58, flush=True)
 
     _loop("ikuai", config.POLL_FAST, job_fast)
@@ -201,6 +238,8 @@ def main():
     _loop("wancheck", 30, job_wan)
     _loop("wanmerge", 30, _merge_wan_check)
     _loop("history", config.POLL_FAST, job_history)
+    _loop("metrics", config.POLL_SAMPLE, job_metrics)
+    _loop("prune", 3600, job_prune)
 
     time.sleep(3)
     srv = ThreadingHTTPServer((config.HOST, config.PORT), Handler)

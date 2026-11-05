@@ -6,6 +6,7 @@ from collections import deque
 
 import assets
 import config
+import store
 
 _lock = threading.Lock()
 _state = {
@@ -93,10 +94,67 @@ def _guess_icon(dev):
 
 
 def _add_event(kind, level, text, detail=""):
-    _events.appendleft({
+    ev = {
         "t": int(time.time()), "kind": kind, "level": level,
         "text": text, "detail": detail,
-    })
+    }
+    _events.appendleft(ev)
+    store.add_event(ev)      # 同步落库，重启后还能翻回来
+
+
+def init_store():
+    """启动时开库并把最近事件读回内存，事件流不从空白开始"""
+    ok = store.init(config.DB_PATH)
+    if not ok:
+        return False
+    for ev in reversed(store.recent_events(300)):
+        _events.appendleft(ev)
+    return True
+
+
+def event_history(limit=200, hours=24, level="", q=""):
+    return store.query_events(int(limit), hours, level, q)
+
+
+def event_days():
+    return store.event_days()
+
+
+def event_total():
+    return store.event_count()
+
+
+def sample_metrics():
+    """把当前关键指标写一条采样，用于回看 24 小时趋势"""
+    with _lock:
+        s = dict(_state)
+    wan = s.get("wan") or {}
+    pve = s.get("pve") or {}
+    wifi = s.get("miwifi") or {}
+    devs = s.get("devices") or []
+    # 采集器还没回数据的那几轮别入库：否则曲线上会插一串 0，看着像断网
+    if not devs and not wan.get("down"):
+        return
+    # mem 要自己算：pve 只给 mem_used / mem_total，没有 mem 这个键
+    mem_total = pve.get("mem_total") or 0
+    mem_pct = round((pve.get("mem_used") or 0) / mem_total * 100, 1) if mem_total else 0
+    store.add_metric(
+        int(time.time()),
+        wan_up=wan.get("up") or 0,
+        wan_down=wan.get("down") or 0,
+        online=sum(1 for d in devs if not d.get("stale")),
+        wifi=wifi.get("online") or 0,
+        cpu=round(pve.get("cpu") or 0, 1),
+        mem=mem_pct,
+    )
+
+
+def metric_history(hours=24, step=60):
+    return store.query_metrics(hours, step)
+
+
+def prune_store():
+    return store.prune(config.DB_KEEP_DAYS)
 
 
 def update(section, value):
