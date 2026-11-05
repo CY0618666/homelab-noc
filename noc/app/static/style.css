@@ -1247,10 +1247,13 @@ body {
   font-size: 12px; color: var(--txt-3); position: relative; z-index: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* 类别色只走左侧竖条：整圈彩边一屏十几张会花，而且和色条重复 */
+/* 类别色只走左侧竖条：整圈彩边一屏十几张会花，而且和色条重复。
+   用 border-left 而不是 inset box-shadow —— 后者的色条会被 ::before 的
+   半透明底盖住，实际只剩一丝边，截图上几乎看不见 */
 .wall-cell.on {
   border-color: var(--line);
-  box-shadow: inset 3px 0 0 var(--c);
+  border-left: 3px solid var(--c);
+  padding-left: 8px;
 }
 .wall-cell.on:hover { border-color: var(--c); }
 .wall-cell.on::before {
@@ -1262,7 +1265,7 @@ body {
   width: 4px; height: 4px; border-radius: 50%; background: var(--c);
 }
 /* 离线 / 半失联的设备把色条换成灰的，一眼看出这一类里掉了几个 */
-.wall-cell.off, .wall-cell.stale { box-shadow: inset 3px 0 0 var(--txt-3); }
+.wall-cell.off, .wall-cell.stale { border-left-color: var(--txt-3); }
 .wall-cell.off { opacity: 0.34; }
 .wall-cell.off svg { stroke: var(--txt-3); }
 /* iKuai 刚把它从在线表里漏掉、还在宽限期：格子留着别闪，弱化 + 状态点变空心 */
