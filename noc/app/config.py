@@ -163,7 +163,20 @@ DEV_GRACE = float(_env("DEV_GRACE", default="25"))       # 消失多久才认离
 DEV_REPEAT = float(_env("DEV_REPEAT", default="180"))    # 同一设备上下线事件最小间隔
 
 # ---------------------------------------------------------------- 历史
-HISTORY_POINTS = int(_env("HISTORY_POINTS", default="1800"))  # 2s × 1800 = 1 小时
+HISTORY_POINTS = int(_env("HISTORY_POINTS", default="1800"))  # 内存环形缓冲，2s × 1800 = 1 小时
+
+# 落盘历史：事件流与指标采样存 SQLite，容器重建不丢。
+# 容器里 /data 是 compose 挂进来的卷，宿主机上是 ./data。
+_db_env = _env("DB_PATH", default="")
+if _db_env:
+    DB_PATH = _db_env
+else:
+    # 优先 /data（容器），退到 app/../data（本地直接跑）
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _vol = "/data" if os.path.isdir("/data") else os.path.join(_here, "..", "data")
+    DB_PATH = os.path.join(_vol, "noc.db")
+DB_KEEP_DAYS = int(_env("DB_KEEP_DAYS", default="90"))     # 只留最近 N 天
+POLL_SAMPLE = float(_env("POLL_SAMPLE", default="60"))     # 指标采样间隔（秒）
 
 # ---------------------------------------------------------------- 探测目标
 PROBE_TARGETS = []
