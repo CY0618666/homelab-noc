@@ -17,7 +17,7 @@
 | 概览 | 现在有没有事 | 外网曲线（2 分钟 / 1 小时 / 24 小时）+ 事件流 + **网络 / 算力 / 终端三张要点卡** + 竖版物理拓扑 |
 | 网络 | 链路哪里堵 | 交换机每口速率与实时收发、无线覆盖与客户端归属、节点 RTT |
 | 算力 | 机器累不累 | PVE 宿主机水位、资源趋势曲线、虚拟机与容器明细表 |
-| 终端 | 谁挂在网上 | 按分类分组的全屋终端卡片，可按名称 / IP / MAC / 厂商搜索 |
+| 终端 | 谁挂在网上 | 按分类分组的全屋终端卡片（左侧色条 = 类别），可按名称 / IP / MAC / 厂商搜索 |
 
 概览不是二级页的缩略图：三张卡只放"要不要点进去"的判断依据——端口在用在几号、
 CPU/内存/存储三条水位与各 guest 占用、在线数与分类、无线挂在哪台 AP、当前最占带宽的三台。
@@ -31,7 +31,7 @@ CPU/内存/存储三条水位与各 guest 占用、在线数与分类、无线�
 顶栏    brand + 页签 + 健康分 + 外网 + 在线 + 连接 + 吞吐 + 时钟
 状态带  室内温湿度 · 室外 · 灯光 · 空调 · 门窗 · 无线 · 在家 · HA
 ─────────────────────────────────────────────────────────
-概览    左：外网链路（可切时间窗）/ 事件流   中：网络·算力·终端要点卡   右：竖版拓扑
+概览    左：外网链路（可切时间窗）/ 事件流   中：网络·算力·终端要点卡（含 AP 挂载树）   右：竖版拓扑
 网络    左上：交换机端口  左下：无线覆盖 + 客户端  右：节点延迟
 算力    左：PVE 水位 + 资源趋势              右：虚拟机 / 容器表
 终端    全屋终端卡片（按分类分组 + 搜索）
@@ -67,7 +67,7 @@ CPU/内存/存储三条水位与各 guest 占用、在线数与分类、无线�
 | iKuai 终端 | `monitor_lanip` | 5s | 全屋终端列表（实测 33–35 台） |
 | PVE | `GET https://192.168.X.10:8006/api2/json/...` | 5s | 宿主机 CPU/内存/rootfs、VM + LXC 明细、每虚拟机网络差分 |
 | **水星 SE106P** | `GET http://192.168.X.3/MainRpm.htm` | 3s | **每端口 link 速率 / 实时收发 / PoE 功率** |
-| **小米 AP ×2** | `/api/misystem/topo_graph`、`device_list`、`wifi_detail_all` | 10s | SSID、信道、每 AP 在线数、无线客户端 MAC 归属 |
+| **小米 AP ×2** | `/api/misystem/topo_graph`、`device_list`、`wifi_detail_all` | 10s | SSID、信道、每 AP 在线数、客户端 MAC / **接入方式（有线 / 2.4G / 5G）** |
 | **Home Assistant** | `GET http://192.168.X.20:8123/api/states` | 15s | 室温湿度、室外天气、空调、灯光、门窗、在家状态、实体健康率 |
 | 本机内核 | `/proc/net/dev` | 2s | FN-Lab 网卡吞吐、负载、存储水位 |
 | TCP 探测 | socket connect | 10s | 8 个关键节点的 RTT / 抖动 / 丢包 |
@@ -80,6 +80,9 @@ CPU/内存/存储三条水位与各 guest 占用、在线数与分类、无线�
 |---|---|
 | 水星 SE106P | 密码不能明文/md5/base64，要走页面里 `cryp_new.js` 的 `securityEncode`（函数名叫 `hex_md5` 但实际是异或映射表）。表长 255 字符，抄错一个字符就 `logonInfo=1` 登录失败。 |
 | 小米 AP | `POST /cgi-bin/luci/api/xqsystem/login` 明文 `logtype=1` 即可拿 stok；真实信道在 `channelInfo.channel`，顶层 `channel` 字段恒为 `"0"`（配置值=自动）。子 AP 自己报不出在线数，要从**主 AP 的 `topo_graph.leafs`** 反查。 |
+| 小米 AP 客户端表 | **必须用 `/api/misystem/device_list`**。老接口 `/api/xqsystem/device_list` 在 BE 系固件上只吐 1 条（实测主 AP 报 9 台、它只给 1 台）。新接口的 `connectionType` 是接入方式：`1`=2.4G、`2`=5G、`4`=有线，`events[0].text` 里还写着「5GHz接入」。`topo_graph.onlines` 是登记过的设备总数（报 14），真实在线数在 `status.count.online`（2）。 |
+| 接入方式别信 iKuai | iKuai `monitor_lanip` 里所有终端的 `interface` 都是 `lan1`，`apmac`/`ssid`/`signal` 只对爱快自家 AP 有值。拿 `iface` 判有线无线，会把满屋 Wi-Fi 设备全标成有线。 |
+| IoT 设备归属 | 智能家居大多连小米的 IoT 专用 SSID，**AP 的客户端表根本不列**。这类设备只能按类别推断为无线，UI 上如实标「无线 · AP 未上报」，塞进某台 AP 底下等于编数据。 |
 | Home Assistant | `/auth/login_flow` 的 `handler` 必须是 `["homeassistant", null]`，写成 `["homeassistant","login_flow"]` 直接 **500**。`/auth/token` 必须 **form 编码**，JSON body 会被读成空 → `unsupported_grant_type`。access_token 30 分钟过期，用 refresh_token 静默续期并落盘 `/data/ha_token.json`。 |
 
 ## 三、部署

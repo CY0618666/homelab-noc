@@ -69,6 +69,96 @@ def _band(ifname):
     return "5G" if ifname in ("wl0", "wifi1") else "2.4G"
 
 
+# /api/misystem/device_list 的 connectionType：1=2.4G、2=5G、4=有线
+# （4 在部分固件里是 eth，5 是 USB 网卡，都按有线处理）
+_CT = {1: ("wifi", "2.4G"), 2: ("wifi", "5G"), 3: ("wifi", "5G"),
+       4: ("wired", ""), 5: ("wired", "")}
+
+
+def _kb(v):
+    """小米的速率单位统一是 KB/s"""
+    try:
+        return float(v or 0) * 1024
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clients_rich(host):
+    """主接口：/api/misystem/device_list
+
+    xqsystem/device_list 在 BE 系固件上只吐 1 条（实测主 AP 报 9 台、它只给 1 台），
+    misystem 这个能拿全，而且带 connectionType，能分清有线 / 2.4G / 5G —— 
+    iKuai 那边看到的所有终端都在 lan1 上，光看 iKuai 是分不出来的。
+    """
+    d = _call(host, "/api/misystem/device_list")
+    out = []
+    for x in d.get("devices") or []:
+        mac = (x.get("mac") or "").upper()
+        if not mac:
+            continue
+        ct = x.get("connectionType")
+        conn, band = _CT.get(ct, ("", ""))
+        ev = (x.get("events") or [{}])[0].get("text") or ""
+        # events 里的文案比 connectionType 更直白，能读到就用它兜底
+        if not conn:
+            if "有线" in ev:
+                conn = "wired"
+            elif "接入" in ev:
+                conn, band = "wifi", ("5G" if "5G" in ev else "2.4G")
+        out.append({
+            "mac": mac,
+            "ip": x.get("ip") or "",
+            "name": x.get("name") or x.get("originName") or "",
+            "conn": conn,
+            "band": band,
+            "up": _kb(x.get("uSpeed")),
+            "down": _kb(x.get("dSpeed")),
+            "online": bool(x.get("online")),
+            "online_sec": 0,
+            "proto": x.get("wifiprotocol") or "",
+            "event": ev,
+        })
+    return out
+
+
+def _clients_plain(host):
+    """兜底：/api/xqsystem/device_list
+
+    子 AP（中继模式）的 misystem 接口返回空，只有这个能拿到 MAC 清单，
+    但字段很少：多数只有 mac，主 AP 上才带 statistics（含 dev 接口名）。
+    """
+    d = _call(host, "/api/xqsystem/device_list")
+    out = []
+    for x in d.get("list") or []:
+        mac = (x.get("mac") or "").upper()
+        if not mac:
+            continue
+        st = x.get("statistics") or {}
+        dev = st.get("dev") or ""
+        if dev.startswith("wl"):
+            conn, band = "wifi", _band(dev)
+        elif dev:
+            conn, band = "wired", ""
+        else:
+            # 在 AP 的客户端表里、又不给接口名：按无线算。
+            # 子 AP 全走这条，实测挂的都是灯 / 空调 / 打印机这类纯 Wi-Fi 设备
+            conn, band = "wifi", ""
+        out.append({
+            "mac": mac,
+            "ip": x.get("ip") or st.get("ip") or "",
+            "name": x.get("name") or x.get("hostname") or "",
+            "conn": conn,
+            "band": band,
+            "up": _kb(st.get("upspeed")),
+            "down": _kb(st.get("downspeed")),
+            "online": True,
+            "online_sec": int(float(st.get("online") or 0)),
+            "proto": "",
+            "event": "",
+        })
+    return out
+
+
 def collect_ap(meta):
     host = meta["host"]
     out = {
@@ -111,24 +201,39 @@ def collect_ap(meta):
                 "ssid": html.unescape(it.get("ssid") or ""),
             })
 
-        dev = _call(host, "/api/xqsystem/device_list")
-        for d in dev.get("list") or []:
-            st = d.get("statistics") or {}
-            mac = (d.get("mac") or "").upper()
-            if not mac:
+        # 两份客户端清单合并：misystem 字段全但部分固件（子 AP）为空，
+        # xqsystem 字段少但哪台都有，以 misystem 为准、xqsystem 补漏
+        rich = _clients_rich(host)
+        plain = _clients_plain(host)
+        by_mac = {c["mac"]: c for c in rich}
+        for c in plain:
+            old = by_mac.get(c["mac"])
+            if old is None:
+                by_mac[c["mac"]] = c
                 continue
-            # 子 AP 只返回 MAC 清单（无 IP/无速率），仍保留用于归属判定
-            out["clients"].append({
-                "mac": mac,
-                "ip": d.get("ip") or "",
-                "name": d.get("name") or d.get("hostname") or "",
-                "dev": st.get("dev") or "",
-                "up": float(st.get("upspeed") or 0) * 1024,     # KB/s → B/s
-                "down": float(st.get("downspeed") or 0) * 1024,
-                "online_sec": int(float(st.get("online") or 0)),
-            })
+            # 补上空字段，但不覆盖 misystem 已经判定的接入方式
+            for k in ("ip", "name", "proto"):
+                if not old.get(k) and c.get(k):
+                    old[k] = c[k]
+            if not old.get("conn") and c.get("conn"):
+                old["conn"] = c["conn"]
+                old["band"] = c["band"]
+            if not old.get("up") and c.get("up"):
+                old["up"] = c["up"]
+            if not old.get("down") and c.get("down"):
+                old["down"] = c["down"]
+        out["clients"] = sorted(
+            by_mac.values(),
+            key=lambda c: -(max(c.get("up") or 0, c.get("down") or 0)),
+        )
+        out["client_src"] = {"rich": len(rich), "plain": len(plain)}
 
         stat = _call(host, "/api/misystem/status")
+        # topo_graph 的 onlines 是"登记过的设备总数"，不是当前在线数
+        # （实测主 AP 报 14，status 里 count.online 只有 2），这里取准的
+        cnt = ((stat.get("count") or {}).get("online"))
+        if cnt is not None:
+            out["online_cnt"] = int(cnt)
         mem = stat.get("mem") or {}
         if mem.get("total"):
             out["mem_total"] = mem.get("total")
@@ -153,6 +258,9 @@ def collect():
 
     # 子 AP 自己报不出在线数，从主 AP 拓扑的 leafs 反查
     by_ip = {a["host"]: a for a in aps}
+    for a in aps:
+        if a.get("online_cnt"):
+            a["online"] = a["online_cnt"]
     for a in aps:
         for lf in a.get("leafs") or []:
             tgt = by_ip.get(lf.get("ip"))

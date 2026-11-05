@@ -908,7 +908,8 @@
     if (!box) return;
     const groups = {};
     (devices || []).forEach((d) => {
-      if (!d.wifi_ap) return;
+      // 只收无线：conn=wired 的设备也带 wifi_ap（表示经哪台 AP 的有线口）
+      if (d.conn !== 'wifi' || !d.wifi_ap) return;
       (groups[d.wifi_ap] = groups[d.wifi_ap] || []).push(d);
     });
     const names = Object.keys(groups);
@@ -1105,19 +1106,42 @@
 
   /* ---------------- 终端墙 ---------------- */
   // 卡片第三行：优先给接入方式，有实时流量就给速率——一眼能看出"谁在占带宽"
+  // 接入方式三态。第三态很重要：AP 没报、iKuai 也看不出来时，
+  // 不能像以前那样拿 iface 一律写成"有线"（满屋 Wi-Fi 设备全被标错）。
+  function linkKind(d) {
+    if (d.conn === 'wifi') return 'wifi';
+    if (d.conn === 'wired') return 'wired';
+    // 服务器 / 交换机 / NAS / AP 本身不可能走无线，类别就能定死
+    if (d.cat === 'infra' || d.cat === 'net') return 'wired';
+    // 智能家居（冰箱 / 洗衣机 / 空调 / 灯）没有网口，只能是无线。
+    // 它们大多连在小米的 IoT 专用 SSID 上，AP 的客户端表根本不列，只能按类别定。
+    if (d.cat === 'smart') return 'wifi';
+    return 'unknown';
+  }
+
+  // 接入方式的一句话描述，卡片第三行和详情抽屉共用
+  function linkText(d) {
+    const kind = linkKind(d);
+    if (kind === 'wifi') {
+      return d.wifi_ap ? d.wifi_ap + (d.wifi_band ? ' · ' + d.wifi_band : '') : '无线 · AP 未上报';
+    }
+    if (kind === 'wired') {
+      return d.wifi_ap ? d.wifi_ap + ' · 有线' : '有线';
+    }
+    return '接入未确认';
+  }
+
   function devMeta(d) {
     if (d.stale) return '刚失去在线信号';
     if (d.ikuai_seen === false) return 'iKuai 未上报 · 探测可达';
-    const bits = [];
-    if (d.wifi_ap) bits.push(d.wifi_ap + (d.wifi_band ? ' ' + d.wifi_band : ''));
-    else if (d.iface) bits.push('有线');
+    const bits = [linkText(d)];
     const rate = Math.max(d.down || 0, d.up || 0);
     if (rate > 1024) {
       bits.push((d.down >= d.up ? '↓ ' : '↑ ') + fmtRate(rate));
-    } else if (!d.wifi_ap && d.zone && d.zone !== '未知') {
+    } else if (d.zone && d.zone !== '未知') {
       bits.push(d.zone);
     }
-    if (!bits.length) bits.push(d.vendor && d.vendor !== 'Unknown' ? d.vendor : '—');
+    if (bits.length === 1 && d.vendor && d.vendor !== 'Unknown') bits.push(d.vendor);
     return bits.join(' · ');
   }
 
@@ -1211,7 +1235,7 @@
       ['位置', d.zone],
       ['厂商', d.vendor || '—'],
       ['型号', d.model || d.hw || '—'],
-      ['接入方式', d.wifi_ap ? (d.wifi_ap + (d.wifi_band ? ' · ' + d.wifi_band : '')) : '有线 / 未知'],
+      ['接入方式', linkText(d)],
       ['当前下行', fmtRate(d.down)],
       ['当前上行', fmtRate(d.up)],
       ['累计下行', fmtBytes(d.down_total)],
@@ -1660,15 +1684,6 @@
       const n = (s.by_cat || {})[c] || 0;
       return `<span class="bcat"><i style="background:${CAT_COLOR[c]}"></i>${CAT_LABEL[c]}<b>${n}</b></span>`;
     }).join('');
-    const apMap = {};
-    (snap.devices || []).forEach((d) => {
-      if (d.wifi_ap) apMap[d.wifi_ap] = (apMap[d.wifi_ap] || 0) + 1;
-    });
-    const apHTML = Object.keys(apMap).length
-      ? Object.entries(apMap)
-        .sort((a, b) => b[1] - a[1])
-        .map(([k, v]) => `<span class="bap-item">${esc(k)}<b>${v}</b></span>`).join('')
-      : `<span class="bap-item">无线 <b>${s.wifi_online || 0}</b></span>`;
     // 当前最活跃的三台：按瞬时收发排序，比"在线多少台"更能看出谁在占带宽
     const top = (snap.devices || [])
       .map((d) => ({ d, rate: (d.up || 0) + (d.down || 0) }))
@@ -1678,18 +1693,84 @@
       .map((x) => `<div class="bport"><span class="bp-led up"></span>`
         + `<span class="bp-name">${esc(x.d.display || x.d.ip)}</span>`
         + `<span class="bp-rate">${fmtRate(x.rate)}</span></div>`).join('');
+
+    const devs = snap.devices || [];
+    const nWifi = devs.filter((d) => linkKind(d) === 'wifi').length;
+    const nWired = devs.filter((d) => linkKind(d) === 'wired').length;
+    const nUnk = devs.length - nWifi - nWired;
     $('bCli').innerHTML =
       `<div class="b2col"><div class="b2l">`
       + `<div class="bbig"><b class="${offN ? 'warn' : 'ok'}">${online}`
       + `<span style="font-size:16px;color:var(--txt-3)">/${known}</span></b>`
       + `<span>在线</span></div>`
-      + `<div class="bx" style="margin:0;font-size:13px">无线 ${s.wifi_online || 0} · 有线 ${Math.max(0, online - (s.wifi_online || 0))}`
-      + (offN ? ` · 离线 <b style="color:var(--warn)">${offN}</b>` : '') + `</div>`
+      + `<div class="blinks">`
+      + `<span class="blk wifi"><i></i>无线 <b>${nWifi}</b></span>`
+      + `<span class="blk wired"><i></i>有线 <b>${nWired}</b></span>`
+      + (nUnk ? `<span class="blk unk"><i></i>未确认 <b>${nUnk}</b></span>` : '')
+      + (offN ? `<span class="blk off"><i></i>离线 <b>${offN}</b></span>` : '')
+      + `</div>`
       + `<div class="bcats">${cats}</div>`
+      + (top ? `<div class="bhr"></div><div class="btop">${top}</div>` : '')
       + `</div><div class="b2r">`
-      + `<div class="bap">${apHTML}</div>`
-      + (top ? `<div class="bhr"></div>${top}` : '')
+      + apTree(snap)
       + `</div></div>`;
+  }
+
+  /* ==========================================================================
+     AP 挂载树：终端卡右半边空着的部分，用来回答"每台 AP 底下挂着谁"
+     ========================================================================== */
+  function apTree(snap) {
+    const devs = snap.devices || [];
+    const aps = (snap.miwifi || {}).aps || [];
+    const byAp = {};
+    const add = (k, d) => { (byAp[k] = byAp[k] || []).push(d); };
+    devs.forEach((d) => {
+      if (d.conn === 'wifi') add(d.wifi_ap || '无线（未归属）', d);
+    });
+
+    // 以 AP 采集结果为准（哪怕一台客户端都没挂也要留节点），再补上只从设备侧看到的
+    const order = [];
+    aps.forEach((a) => { if (a.label) order.push({ label: a.label, ok: a.ok !== false }); });
+    Object.keys(byAp).forEach((k) => {
+      if (!order.some((o) => o.label === k)) order.push({ label: k, ok: true });
+    });
+    if (!order.length) return `<div class="ap-empty">无线侧暂无数据</div>`;
+
+    // 不按客户端数排序：主 AP 是入口，位置固定在最上面，
+    // 数量变化时节点不跳动，扫视才有稳定的落点
+    const tree = order.map((ap) => {
+      const kids = (byAp[ap.label] || []).slice()
+        .sort((a, b) => ((b.up || 0) + (b.down || 0)) - ((a.up || 0) + (a.down || 0)));
+      const MAX = 6;
+      const shown = kids.slice(0, MAX);
+      const rest = kids.length - shown.length;
+      const rows = shown.map((d) => {
+        const rate = (d.up || 0) + (d.down || 0);
+        return `<li class="ak">
+          <i class="ak-dot" style="background:${CAT_COLOR[d.cat] || 'var(--txt-3)'}"></i>
+          <span class="ak-nm">${esc(d.display || d.ip)}</span>`
+          + (rate > 1024 ? `<span class="ak-r">${fmtRate(rate)}</span>` : '')
+          + `</li>`;
+      }).join('');
+      const more = rest > 0 ? `<li class="ak ak-more">还有 ${rest} 台</li>` : '';
+      const none = !kids.length ? `<li class="ak ak-none">暂无客户端</li>` : '';
+      return `<div class="apt">
+        <div class="apt-node">
+          <i class="apt-led${ap.ok ? ' on' : ''}"></i>
+          <span class="apt-nm">${esc(ap.label)}</span>
+          <b class="apt-n">${kids.length}</b>
+        </div>
+        <ul class="apt-kids">${rows}${more}${none}</ul>
+      </div>`;
+    }).join('');
+
+    // 连得上、但 AP 的客户端表里查不到归属的（多为 IoT 专用 SSID 上的设备）。
+    // 不硬塞进某台 AP 下面，否则等于编数据；单独说一句，让看的人知道总数对得上。
+    const loose = devs.filter((d) => linkKind(d) === 'wifi' && !d.wifi_ap).length;
+    const note = loose
+      ? `<div class="apt-note">另有 ${loose} 台无线设备不在 AP 客户端列表里（IoT 专用 SSID）</div>`
+      : '';
+    return `<div class="aptree">${tree}${note}</div>`;
   }
 
   /* ==========================================================================

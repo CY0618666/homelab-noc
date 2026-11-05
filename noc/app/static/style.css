@@ -18,6 +18,7 @@
   --surface-solid: #0d1219;
 
   --line: rgba(255, 255, 255, 0.075);
+  --tree-line: rgba(255, 255, 255, 0.2);
   --line-2: rgba(255, 255, 255, 0.14);
 
   --txt: #e8eef6;
@@ -39,11 +40,13 @@
   --accent-soft: rgba(53, 182, 242, 0.1);
   --accent-line: rgba(53, 182, 242, 0.5);
 
-  --cat-infra: #35b6f2;
-  --cat-net: #3fc9c1;
-  --cat-media: #9d7cf5;
-  --cat-smart: #f0a93d;
-  --cat-client: #7f93aa;
+  /* 五个类别拉开色相：蓝 / 青绿 / 紫 / 橙 / 灰蓝。
+     原来 infra 是 #35b6f2、net 是 #3fc9c1，色相只差 8°，一屏扫过去分不出来 */
+  --cat-infra: #4a9eff;
+  --cat-net: #16c79a;
+  --cat-media: #b06cf5;
+  --cat-smart: #f2a015;
+  --cat-client: #8b9fc0;
 
   --topbar: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
   --panel: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.016));
@@ -102,6 +105,7 @@
   --surface-solid: #ffffff;
 
   --line: rgba(15, 32, 54, 0.1);
+  --tree-line: rgba(15, 32, 54, 0.22);
   --line-2: rgba(15, 32, 54, 0.2);
 
   --txt: #0d1927;
@@ -123,11 +127,11 @@
   --accent-soft: rgba(10, 118, 187, 0.09);
   --accent-line: rgba(10, 118, 187, 0.45);
 
-  --cat-infra: #0a76bb;
-  --cat-net: #0b8f88;
-  --cat-media: #6845d4;
-  --cat-smart: #c07f10;
-  --cat-client: #64758a;
+  --cat-infra: #0b6fc9;
+  --cat-net: #0a8f66;
+  --cat-media: #7b3fd4;
+  --cat-smart: #b06f00;
+  --cat-client: #5f7387;
 
   --topbar: linear-gradient(180deg, #ffffff, #f8fbff);
   --panel: linear-gradient(180deg, #ffffff, #fbfdff);
@@ -606,12 +610,63 @@ body {
 
 .bhr { height: 1px; background: var(--line); margin: 4px 0; flex-shrink: 0; }
 
-/* 终端摘要卡在宽屏下分两栏，别让一行字横跨一千像素 */
-.b2col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 10px 44px; }
-.b2col > div { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* 终端摘要卡：左窄（数字与分类）右宽（AP 挂载树） */
+.b2col { display: grid; grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr); gap: 10px 34px; }
+.b2col > div { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
 .b2col .bap { gap: 7px; }
 /* 右栏的活跃终端别把速率甩到一千像素外 */
 .b2col .b2r .bport { max-width: 420px; }
+
+/* 接入方式四计数：无线 / 有线 / 未确认 / 离线 */
+.blinks { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--txt-2); }
+.blk { display: inline-flex; align-items: center; gap: 6px; }
+.blk i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.blk.wifi i { background: var(--cyan); }
+.blk.wired i { background: var(--ok); }
+/* 未确认用空心圈，跟"确实有线"区分开 */
+.blk.unk i { background: transparent; border: 1px solid var(--warn); }
+.blk.off i { background: transparent; border: 1px solid var(--txt-3); }
+.blk b { font-family: var(--mono); font-weight: 500; color: var(--txt); }
+.btop { display: flex; flex-direction: column; gap: 3px; }
+
+/* ---------- AP 挂载树 ---------- */
+.aptree { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.apt-node { display: flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--txt-strong); }
+.apt-led {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--txt-3);
+}
+.apt-led.on { background: var(--ok); box-shadow: 0 0 7px var(--ok-line); }
+.apt-nm { font-weight: 500; white-space: nowrap; }
+.apt-n { margin-left: auto; font-family: var(--mono); font-weight: 500; color: var(--cyan); }
+
+.apt-kids { list-style: none; margin: 2px 0 0; padding: 0; }
+.ak {
+  position: relative; display: flex; align-items: center; gap: 7px;
+  padding: 2px 0 2px 21px; font-size: 12.5px; color: var(--txt-2); line-height: 1.55;
+}
+/* 竖线 + 横钩拼出 └─ 的树形；首尾各截一半，只有中间项通到底 */
+.ak::before {
+  content: ""; position: absolute; left: 8px; top: 0; bottom: 0;
+  width: 1px; background: var(--tree-line);
+}
+.ak::after {
+  content: ""; position: absolute; left: 8px; top: 50%;
+  width: 9px; height: 1px; background: var(--tree-line);
+}
+.ak:first-child::before { top: 50%; }
+.ak:last-child::before { bottom: 50%; }
+.ak:only-child::before { display: none; }
+.ak-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.ak-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ak-r { flex-shrink: 0; font-family: var(--mono); font-size: 12px; color: var(--txt-3); }
+.ak-more, .ak-none { color: var(--txt-3); font-size: 12px; }
+.ap-empty { font-size: 13px; color: var(--txt-3); }
+/* 归属查不到的无线设备：单独说明，不塞进任何一台 AP 底下 */
+.apt-note {
+  margin-top: 2px; padding-top: 7px; border-top: 1px dashed var(--line);
+  font-size: 12px; color: var(--txt-3); line-height: 1.5;
+}
 
 /* 事件流里的重复次数 */
 .ex-n { margin-left: auto; font-size: 12px; color: var(--txt-3); font-family: var(--mono); flex-shrink: 0; }
@@ -1192,15 +1247,22 @@ body {
   font-size: 12px; color: var(--txt-3); position: relative; z-index: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.wall-cell.on { border-color: var(--c); }
+/* 类别色只走左侧竖条：整圈彩边一屏十几张会花，而且和色条重复 */
+.wall-cell.on {
+  border-color: var(--line);
+  box-shadow: inset 3px 0 0 var(--c);
+}
+.wall-cell.on:hover { border-color: var(--c); }
 .wall-cell.on::before {
   content: ""; position: absolute; inset: 0; border-radius: 9px;
-  background: var(--c); opacity: 0.09;
+  background: var(--c); opacity: 0.055;
 }
 .wall-cell.on::after {
   content: ""; position: absolute; top: 7px; right: 7px;
   width: 4px; height: 4px; border-radius: 50%; background: var(--c);
 }
+/* 离线 / 半失联的设备把色条换成灰的，一眼看出这一类里掉了几个 */
+.wall-cell.off, .wall-cell.stale { box-shadow: inset 3px 0 0 var(--txt-3); }
 .wall-cell.off { opacity: 0.34; }
 .wall-cell.off svg { stroke: var(--txt-3); }
 /* iKuai 刚把它从在线表里漏掉、还在宽限期：格子留着别闪，弱化 + 状态点变空心 */

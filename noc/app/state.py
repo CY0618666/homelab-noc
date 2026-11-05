@@ -45,6 +45,10 @@ _prev_lamp = {}
 _prev_cover = {}
 # MAC(大写) → {"ap": 名称, "node": 拓扑节点, "band": 频段}
 _wifi_map = {}
+# MAC(大写) → 同上，但这台是「经某台 AP 的网口有线接入」的
+# 注意：iKuai 里所有终端的 iface 都是 lan1，分不出有线无线，
+# 接入方式只能以 AP 自己报的 connectionType 为准
+_wired_map = {}
 
 
 def _classify(dev):
@@ -75,6 +79,10 @@ def _classify(dev):
         "known": out.get("known", False),
     })
     dev["cat_label"] = assets.CATEGORY_LABEL.get(dev["cat"], "其他")
+    # 配置里手写了 link 就以它为准：AP 报不到的设备（IoT 专用 SSID、
+    # 或 AP 的客户端表干脆不列）只能由人指定，别让面板瞎猜
+    if out.get("link") in ("wifi", "wired"):
+        dev["conn"] = out["link"]
     return dev
 
 
@@ -199,13 +207,23 @@ def update_devices(rows):
             if rnd.startswith(("32:", "5a:", "56:", "12:", "ca:", "da:", "02:")) and len(rnd) == 17:
                 d["random_mac"] = True
             d["last_seen"] = int(now)
+            d["stale"] = False
+            d["ikuai_seen"] = True
+            d["conn"] = ""
             w = _wifi_map.get((d.get("mac") or "").upper())
             if w:
+                d["conn"] = "wifi"
                 d["wifi_ap"] = w["ap"]
                 d["wifi_band"] = w["band"]
                 d["wifi_node"] = w["node"]
-            d["stale"] = False
-            d["ikuai_seen"] = True
+            else:
+                # 没在无线表里也不等于有线——iKuai 的 iface 恒为 lan1，
+                # 判不出来就老实写"未确认"，别把冰箱标成有线
+                wr = _wired_map.get((d.get("mac") or "").upper())
+                if wr:
+                    d["conn"] = "wired"
+                    d["wifi_ap"] = wr["ap"]
+                    d["wifi_node"] = wr["node"]
             out.append(_classify(d))
 
         cur = {d["ip"]: d for d in out}
@@ -343,20 +361,32 @@ def update_switch(payload):
 
 
 def update_wifi(payload):
-    """小米 AP：维护 MAC → 归属 AP 映射，供终端详情显示接入点"""
-    m = {}
+    """小米 AP：维护 MAC → 接入方式映射
+
+    这里只信 AP 自己报的 connectionType。iKuai 那边所有终端的 iface 都是 lan1，
+    拿它判有线无线会把满屋子的 Wi-Fi 设备全标成有线（冰箱就是这么躺枪的）。
+    """
+    wmap, rmap = {}, {}
+    # 先收有线：同一台设备在两台 AP 眼里可能一个说有线、一个说无线
+    # （子 AP 拿不到接口名，只能默认当无线），有线的断言更强，优先采信
     for a in payload.get("aps") or []:
         for c in a.get("clients") or []:
             mac = (c.get("mac") or "").upper()
-            if not mac:
+            if mac and c.get("conn") == "wired":
+                rmap[mac] = {"ap": a.get("label") or a.get("host"), "node": a.get("node"),
+                             "band": "", "up": c.get("up"), "down": c.get("down")}
+    for a in payload.get("aps") or []:
+        for c in a.get("clients") or []:
+            mac = (c.get("mac") or "").upper()
+            if not mac or mac in rmap or c.get("conn") == "wired":
                 continue
-            dev = c.get("dev") or ""
-            band = "5G" if dev.startswith("wl0") else ("2.4G" if dev.startswith("wl1") else "")
-            m[mac] = {"ap": a.get("label") or a.get("host"), "node": a.get("node"),
-                      "band": band, "up": c.get("up"), "down": c.get("down")}
+            wmap[mac] = {"ap": a.get("label") or a.get("host"), "node": a.get("node"),
+                         "band": c.get("band") or "", "up": c.get("up"), "down": c.get("down")}
     with _lock:
         _wifi_map.clear()
-        _wifi_map.update(m)
+        _wifi_map.update(wmap)
+        _wired_map.clear()
+        _wired_map.update(rmap)
         _state["miwifi"] = payload
         _state["ts"] = int(time.time())
         _state["errors"].pop("miwifi", None)
